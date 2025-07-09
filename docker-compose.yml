@@ -1,0 +1,18 @@
+---
+services:
+  ansible:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        SOME_ARG: ${SOME_ARG-debian:bookworm}
+    container_name: "ansible_homelab"
+    restart: "no"
+    volumes:
+      - "./:/ansible:rw,delegated"
+    secrets:
+      - user_ssh_key
+
+secrets:
+  user_ssh_key:
+    file: ~/.ssh/id_rsa

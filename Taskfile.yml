@@ -1,0 +1,17 @@
+version: "3"
+
+vars:
+  GREETING: Hello, World!
+
+tasks:
+  default:
+    cmds:
+      - docker-compose run --remove-orphans ansible "{{.CLI_ARGS}}"
+
+  pb:
+    cmds:
+      - docker-compose run --remove-orphans ansible ansible-playbook -i ./inventory/hosts default "{{.CLI_ARGS}}"
+
+  build:
+    cmds:
+      - docker-compose run --build ansible ansible -i ./inventory/hosts default "{{.CLI_ARGS}}"

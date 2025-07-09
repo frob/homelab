@@ -1,0 +1,20 @@
+## Initial APT setup for debian based servers.
+---
+- name: Set the APT Sources
+  hosts: "*"
+  become: true
+  tasks:
+    - name: Remove the CD Rom Sources
+      ansible.builtin.apt_repository:
+        repo: "deb cdrom:[Debian GNU/Linux 12.11.0 _Bookworm_ - Official amd64 DVD Binary-1 with firmware 20250517-09:52]/ bookworm contrib main non-free-firmware"
+        state: absent
+        update_cache: true
+
+- name: Update the servers
+  hosts: "*"
+  become: true
+  tasks:
+    - name: Update
+      apt:
+        update_cache: yes
+        upgrade: yes
