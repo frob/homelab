@@ -6,6 +6,9 @@ services:
       dockerfile: Dockerfile
       args:
         SOME_ARG: ${SOME_ARG-debian:bookworm}
+    environment:
+      ANSIBLE_ROLES_PATH: "./roles"
+      ANSIBLE_COLLECTIONS_PATHS: "./collections"
     container_name: "ansible_homelab"
     restart: "no"
     volumes:
