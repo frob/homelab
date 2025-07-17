@@ -5,8 +5,10 @@
   become: true
   tasks:
     - name: Setup users/keys
+      with_items:
+        - frob
       ansible.builtin.user:
-        name: frob
+        name: "{{ item }}"
         create_home: yes
         generate_ssh_key: yes
         ssh_key_bits: 2048
@@ -33,21 +35,13 @@
       notify: restart ssh service
       when: sshd_PasswordAuthentication is defined
 
-    - name: "Enable auto updates: install unattended-upgrades"
+    - name: "Enable auto updates: install unattended-upgrades apt-listchanges bsd-mailx"
+      with_items:
+        - unattended-upgrades
+        - apt-listchanges
+        - bsd-mailx
       apt:
-        name: unattended-upgrades
-        state: present
-        update_cache: yes
-
-    - name: "Enable auto updates: install apt-listchanges"
-      apt:
-        name: apt-listchanges
-        state: present
-        update_cache: yes
-
-    - name: "Enable auto updates: install bsd-mailx"
-      apt:
-        name: bsd-mailx
+        name: "{{ item }}"
         state: present
         update_cache: yes
 
@@ -81,6 +75,20 @@
     - name: Time & Timezone setup
       community.general.timezone:
         name: America/Los_Angeles
+
+    - name: "Install ufw"
+      with_items:
+        - ufw
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+
+    - name: "Configure Firewall for SSH"
+      community.general.ufw:
+        rule: allow
+        name: ssh
+        state: enabled
 
     # handlers file for sshd-config
     - name: restart ssh service

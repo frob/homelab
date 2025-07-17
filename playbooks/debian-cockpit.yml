@@ -1,0 +1,19 @@
+---
+- name: Install and configure cockpit.
+  hosts: "*"
+  become: true
+  tasks:
+    - name: "Install cockpit and all dependencies"
+      with_items:
+        - cockpit
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+
+    - name: "Configure Firewall for Cockpit"
+      community.general.ufw:
+        rule: allow
+        # name: cockpit
+        to_port: 9090
+        state: enabled
