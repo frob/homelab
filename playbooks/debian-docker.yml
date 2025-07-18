@@ -1,0 +1,52 @@
+## Setup Docker
+---
+- name: Install and Configure Docker
+  hosts: "*"
+  become: true
+  tasks:
+    # This will be the new way with ansible 2.15
+    # - name: Add Docker repo using key from URL.
+    #   ansible.builtin.deb822_repository:
+    #     name: docker
+    #     types: [deb]
+    #     uris: "https://example.net/"
+    #     components: [binary]
+    #     signed_by: https://example.net/release-key.txt
+    #     state: present
+    #     enabled: true
+
+    - name: Add Docker apt repo key
+      become: true
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
+        dest: /etc/apt/trusted.gpg.d/docker.asc
+        mode: "0644"
+        force: true
+
+    - name: Add Docker apt repository
+      become: true
+      ansible.builtin.apt_repository:
+        repo: "deb https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: "Install Docker"
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-buildx-plugin
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+
+    - name: Setup docker users
+      ansible.builtin.user:
+        name: frob
+        groups: docker
+        append: true
