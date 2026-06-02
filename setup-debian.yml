@@ -3,4 +3,8 @@
 - import_playbook: playbooks/debian-basic.yml
 - import_playbook: playbooks/debian-docker.yml
 - import_playbook: playbooks/debian-cockpit.yml
+- import_playbook: playbooks/debian-docker.yml
 - import_playbook: playbooks/debian-syncthing.yml
+- import_playbook: playbooks/debian-kde-flatpaks.yml
+- import_playbook: playbooks/debian-basic-apps.yml
+- import_playbook: playbooks/debian-extended-basic-apps.yml

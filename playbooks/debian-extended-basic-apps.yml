@@ -1,0 +1,26 @@
+## Setup Flatpak based applications
+---
+- name: Install and Configure Flatpaks
+  hosts: extended
+  become: true
+  tasks:
+    - name: "Uninstall Non-Flatpak Apps"
+      with_items:
+        - gimp
+      apt:
+        name: "{{ item }}"
+        state: absent
+        update_cache: yes
+
+    - name: Install GIMP, Inkscape, Krita, etc
+      community.general.flatpak:
+        name:
+          - org.gimp.GIMP
+          - org.inkscape.Inkscape
+          - org.kde.krita
+          - com.vscodium.codium
+          - dev.zed.Zed
+          - org.audacityteam.Audacity
+          - org.ardour.Ardour
+          - org.kde.kdenlive
+        state: present
