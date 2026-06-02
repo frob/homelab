@@ -1,5 +1,7 @@
 ---
 - import_playbook: playbooks/debian-init.yml
 - import_playbook: playbooks/debian-basic.yml
+- import_playbook: playbooks/debian-network.yml
 - import_playbook: playbooks/debian-docker.yml
+- import_playbook: playbooks/debian-portainer.yml
 - import_playbook: playbooks/debian-cockpit.yml

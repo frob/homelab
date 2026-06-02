@@ -1,0 +1,60 @@
+## Configure a static IP via ifupdown (/etc/network/interfaces.d/).
+## NOTE: Apply to a host you can reach by console — a bad value will lock you
+## out of SSH. The change takes effect on next reboot (or when you manually
+## bring the interface down/up).
+---
+- name: Configure static IP (ifupdown)
+  hosts: init
+  become: true
+  tasks:
+    - name: Install ifupdown
+      ansible.builtin.apt:
+        name: ifupdown
+        state: present
+        update_cache: yes
+      check_mode: false
+
+    - name: Ensure /etc/network/interfaces sources interfaces.d
+      ansible.builtin.lineinfile:
+        path: /etc/network/interfaces
+        line: "source /etc/network/interfaces.d/*"
+        state: present
+        create: yes
+
+    - name: Write static interface config
+      ansible.builtin.copy:
+        dest: "/etc/network/interfaces.d/{{ network_interface }}"
+        mode: "0644"
+        content: |
+          # Managed by Ansible — homelab static IP for {{ network_interface }}
+          auto {{ network_interface }}
+          iface {{ network_interface }} inet static
+              address {{ network_address }}
+              netmask {{ network_netmask }}
+              gateway {{ network_gateway }}
+              dns-nameservers {{ network_dns | join(' ') }}
+              dns-search {{ domain_name }}
+
+    - name: Write /etc/resolv.conf (used until ifupdown rewrites on next boot)
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        mode: "0644"
+        content: |
+          search {{ domain_name }}
+          {% for ns in network_dns %}
+          nameserver {{ ns }}
+          {% endfor %}
+
+    - name: Disable systemd-networkd if active (avoid conflict with ifupdown)
+      ansible.builtin.systemd_service:
+        name: systemd-networkd
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Disable NetworkManager if installed (avoid conflict with ifupdown)
+      ansible.builtin.systemd_service:
+        name: NetworkManager
+        enabled: false
+        state: stopped
+      failed_when: false

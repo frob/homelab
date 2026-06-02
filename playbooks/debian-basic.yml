@@ -1,33 +1,99 @@
-## After APT is configured, this playbook will do the initial setup of linux.
+## After APT is configured, this playbook does the initial setup of Linux.
 ---
-- name: Basic Setup, add users & configure ssh.
-  hosts: "*"
+- name: Basic Setup — users, SSH, hostname, auto-updates, firewall
+  hosts: init
   become: true
+  handlers:
+    - name: restart ssh service
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: reload sysctl
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: restart fail2ban
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        state: restarted
+
   tasks:
-    - name: Setup users/keys
-      with_items:
-        - frob
+    # --- Hostname & domain ---
+    - name: Set system hostname
+      ansible.builtin.hostname:
+        name: "{{ host_name }}"
+
+    - name: Ensure /etc/hosts contains FQDN entry
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1\t{{ host_name }}.{{ domain_name }} {{ host_name }}"
+        state: present
+
+    # --- Console banner: show how to reach this box at the login prompt ---
+    # \n = hostname, \o = domain, \4{iface} = IPv4 on that interface,
+    # \6{iface} = IPv6, \s = OS, \r = kernel. Expanded by getty at display.
+    - name: Write /etc/issue with hostname, FQDN and IP info
+      ansible.builtin.copy:
+        dest: /etc/issue
+        mode: "0644"
+        content: |
+          {{ host_name }}.{{ domain_name }}  (\s \r \m)
+
+          Host:   \n.\o
+          IPv4:   \4{{ '{' }}{{ network_interface }}{{ '}' }}
+          IPv6:   \6{{ '{' }}{{ network_interface }}{{ '}' }}
+          SSH:    ssh {{ admin_user }}@{{ network_address }}
+          Cockpit:   https://{{ network_address }}:9090
+          Portainer: https://{{ network_address }}:{{ portainer_https_port }}
+
+          \d \t on \l
+
+    - name: Write /etc/issue.net (banner for remote SSH pre-auth, optional)
+      ansible.builtin.copy:
+        dest: /etc/issue.net
+        mode: "0644"
+        content: |
+          {{ host_name }}.{{ domain_name }}
+          Authorized access only.
+
+    # --- Users & SSH keys ---
+    - name: Create admin user
       ansible.builtin.user:
-        name: "{{ item }}"
+        name: "{{ admin_user }}"
         create_home: yes
+        shell: /bin/bash
         generate_ssh_key: yes
-        ssh_key_bits: 2048
+        ssh_key_bits: 4096
         ssh_key_file: .ssh/id_rsa
 
-    - name: Add pubic key to user
-      ansible.posix.authorized_key:
-        user: frob
-        state: present
-        key: "{{ lookup('file', '/ansible/public_keys/id_rsa.pub') }}"
+    - name: Ensure admin user's .ssh dir exists
+      ansible.builtin.file:
+        path: "/home/{{ admin_user }}/.ssh"
+        state: directory
+        owner: "{{ admin_user }}"
+        group: "{{ admin_user }}"
+        mode: "0700"
 
-    - name: Setup sudo users
+    - name: Authorize admin user's public key
+      ansible.builtin.lineinfile:
+        path: "/home/{{ admin_user }}/.ssh/authorized_keys"
+        line: "{{ lookup('file', '/ansible/public_keys/id_rsa.pub') | trim }}"
+        create: true
+        owner: "{{ admin_user }}"
+        group: "{{ admin_user }}"
+        mode: "0600"
+        state: present
+
+    - name: Add admin user to sudo group
       ansible.builtin.user:
-        name: frob
+        name: "{{ admin_user }}"
         groups: sudo
         append: true
 
-    - name: Remove password based ssh
-      lineinfile:
+    - name: Disable password-based SSH auth
+      ansible.builtin.lineinfile:
         dest: /etc/ssh/sshd_config
         regexp: "^#?PasswordAuthentication"
         line: "PasswordAuthentication {{ sshd_PasswordAuthentication }}"
@@ -35,63 +101,200 @@
       notify: restart ssh service
       when: sshd_PasswordAuthentication is defined
 
-    - name: "Enable auto updates: install unattended-upgrades apt-listchanges bsd-mailx"
-      with_items:
-        - unattended-upgrades
-        - apt-listchanges
-        - bsd-mailx
-      apt:
-        name: "{{ item }}"
+    - name: Also disable keyboard-interactive (prevents PAM password fallback)
+      ansible.builtin.lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^#?KbdInteractiveAuthentication"
+        line: "KbdInteractiveAuthentication no"
+        validate: "sshd -t -f %s"
+      notify: restart ssh service
+
+    - name: Disable direct SSH login as root
+      ansible.builtin.lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
+        validate: "sshd -t -f %s"
+      notify: restart ssh service
+
+    - name: Limit SSH MaxAuthTries
+      ansible.builtin.lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^#?MaxAuthTries"
+        line: "MaxAuthTries 3"
+        validate: "sshd -t -f %s"
+      notify: restart ssh service
+
+    - name: Tighten SSH LoginGraceTime
+      ansible.builtin.lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^#?LoginGraceTime"
+        line: "LoginGraceTime 20"
+        validate: "sshd -t -f %s"
+      notify: restart ssh service
+
+    - name: Restrict SSH to admin user only (AllowUsers)
+      ansible.builtin.lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^#?AllowUsers"
+        line: "AllowUsers {{ admin_user }}"
+        validate: "sshd -t -f %s"
+      notify: restart ssh service
+
+    # --- Root account: random password, then locked. ---
+    # Only resets root's password if the current shadow entry has no real hash
+    # (empty, `*`, or `!` with nothing after it). This keeps the play
+    # idempotent — re-running won't churn root's password on every deploy.
+    - name: Check root's current /etc/shadow entry
+      ansible.builtin.command: "awk -F: '$1==\"root\"{print $2}' /etc/shadow"
+      register: root_shadow
+      changed_when: false
+      check_mode: false
+
+    - name: Set root password to a fresh random value (one-time)
+      ansible.builtin.user:
+        name: root
+        password: "{{ lookup('password', '/dev/null length=64 chars=ascii_letters,digits') | password_hash('sha512') }}"
+      when: root_shadow.stdout in ['', '*', '!', '!*']
+
+    - name: Lock root account (sudo still works; password login does not)
+      ansible.builtin.user:
+        name: root
+        password_lock: true
+
+    # --- Unattended upgrades ---
+    # Install with check_mode: false so the package is actually present
+    # during --check runs too — otherwise the lineinfile tasks below would
+    # fail because /etc/apt/apt.conf.d/50unattended-upgrades doesn't exist
+    # yet on a fresh box.
+    - name: Install unattended-upgrades & helpers
+      ansible.builtin.apt:
+        name:
+          - unattended-upgrades
+          - apt-listchanges
+          - bsd-mailx
         state: present
         update_cache: yes
+      check_mode: false
 
-    - name: Configure auto updates
-      lineinfile:
+    - name: Enable stable origin in 50unattended-upgrades
+      ansible.builtin.lineinfile:
         path: /etc/apt/apt.conf.d/50unattended-upgrades
         search_string: '//        "origin=Debian,codename=${distro_codename},label=Debian";'
         line: '        "origin=Debian,codename=${distro_codename},label=Debian";'
         state: present
 
-    - name: Configure auto updates
-      lineinfile:
+    - name: Enable security origin in 50unattended-upgrades
+      ansible.builtin.lineinfile:
         path: /etc/apt/apt.conf.d/50unattended-upgrades
         search_string: '//        "origin=Debian,codename=${distro_codename},label=Debian-Security";'
         line: '        "origin=Debian,codename=${distro_codename},label=Debian-Security";'
         state: present
 
-    - name: Configure auto updates
-      lineinfile:
+    - name: Enable -security suite in 50unattended-upgrades
+      ansible.builtin.lineinfile:
         path: /etc/apt/apt.conf.d/50unattended-upgrades
         search_string: '//        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";'
         line: '        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";'
         state: present
 
-    - name: Enable and Start Unattended Upgrades
+    - name: Enable periodic unattended-upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    - name: Enable & start unattended-upgrades
       ansible.builtin.systemd_service:
         name: unattended-upgrades
         state: started
         enabled: true
 
-    - name: Time & Timezone setup
+    # --- Timezone ---
+    - name: Set timezone
       community.general.timezone:
-        name: America/Los_Angeles
+        name: "{{ timezone }}"
 
-    - name: "Install ufw"
-      with_items:
-        - ufw
-      apt:
-        name: "{{ item }}"
+    # --- Firewall ---
+    - name: Install ufw
+      ansible.builtin.apt:
+        name: ufw
         state: present
         update_cache: yes
+      check_mode: false
 
-    - name: "Configure Firewall for SSH"
+    # `limit` is kernel rate-limiting: max 6 new connections per 30s from a
+    # single source IP. Cheap brute-force mitigation.
+    - name: Rate-limit SSH through ufw and enable it
       community.general.ufw:
-        rule: allow
-        name: ssh
+        rule: limit
+        name: OpenSSH
         state: enabled
 
-    # handlers file for sshd-config
-    - name: restart ssh service
-      service:
-        name: sshd
-        state: restarted
+    # --- sysctl network hardening ---
+    - name: Drop in /etc/sysctl.d/99-hardening.conf
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-hardening.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible — basic network hardening.
+          # Source-route validation (drop packets with mismatched src).
+          net.ipv4.conf.all.rp_filter = 1
+          net.ipv4.conf.default.rp_filter = 1
+
+          # Don't accept ICMP redirects (mitm-style rerouting).
+          net.ipv4.conf.all.accept_redirects = 0
+          net.ipv4.conf.default.accept_redirects = 0
+          net.ipv6.conf.all.accept_redirects = 0
+          net.ipv6.conf.default.accept_redirects = 0
+
+          # Don't accept source-routed packets.
+          net.ipv4.conf.all.accept_source_route = 0
+          net.ipv4.conf.default.accept_source_route = 0
+          net.ipv6.conf.all.accept_source_route = 0
+          net.ipv6.conf.default.accept_source_route = 0
+
+          # Log suspicious packets (spoofed/source-routed/redirects).
+          net.ipv4.conf.all.log_martians = 1
+
+          # Ignore broadcast ICMP (smurf amplification).
+          net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+          # Protect against SYN flood.
+          net.ipv4.tcp_syncookies = 1
+
+          # Protect against time-wait assassination.
+          net.ipv4.tcp_rfc1337 = 1
+      notify: reload sysctl
+
+    # --- fail2ban: ban repeat SSH offenders ---
+    - name: Install fail2ban
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+        update_cache: yes
+      check_mode: false
+
+    - name: Configure fail2ban sshd jail
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.local
+        mode: "0644"
+        content: |
+          [sshd]
+          enabled = true
+          port    = ssh
+          maxretry = 3
+          findtime = 10m
+          bantime  = 1h
+          backend  = systemd
+      notify: restart fail2ban
+
+    - name: Enable & start fail2ban
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        state: started
+        enabled: true

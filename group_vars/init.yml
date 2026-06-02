@@ -1,0 +1,31 @@
+---
+# Identity
+admin_user: frob
+timezone: America/Los_Angeles
+
+# Hostname / domain
+host_name: util1
+domain_name: andrsn.org
+
+# Network — static IP via ifupdown
+network_interface: ens18
+network_address: 192.168.1.50
+network_netmask: 255.255.255.0
+network_cidr: 24
+network_gateway: 192.168.1.1
+network_dns:
+  - 192.168.1.1
+
+# SSH
+sshd_PasswordAuthentication: "no"
+
+# Docker daemon
+docker_data_root: /var/lib/docker
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+
+# Portainer
+portainer_image: portainer/portainer-ce:latest
+portainer_data_dir: /opt/portainer/data
+portainer_compose_dir: /opt/portainer
+portainer_https_port: 9443

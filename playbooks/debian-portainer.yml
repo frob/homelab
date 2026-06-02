@@ -1,0 +1,51 @@
+## Deploy Portainer CE via docker compose.
+---
+- name: Install Portainer CE
+  hosts: init
+  become: true
+  tasks:
+    # Run for real even during --check: creating dirs and writing the
+    # compose file are preconditions for the docker compose action below.
+    - name: Ensure portainer dirs exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ portainer_compose_dir }}"
+        - "{{ portainer_data_dir }}"
+      check_mode: false
+
+    - name: Render Portainer docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ portainer_compose_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          ---
+          services:
+            portainer:
+              image: {{ portainer_image }}
+              container_name: portainer
+              restart: always
+              ports:
+                - "{{ portainer_https_port }}:9443"
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+                - {{ portainer_data_dir }}:/data
+      check_mode: false
+
+    # The compose module doesn't fully support --check; skip it during
+    # dry-runs (the dir + file precondition above is the interesting
+    # part anyway).
+    - name: Bring up Portainer stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ portainer_compose_dir }}"
+        state: present
+      when: not ansible_check_mode
+
+    - name: Allow Portainer HTTPS port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ portainer_https_port }}"
+        proto: tcp
+        state: enabled

@@ -1,19 +1,24 @@
 ---
-- name: Install and configure cockpit.
-  hosts: "*"
+- name: Install and configure Cockpit
+  hosts: init
   become: true
   tasks:
-    - name: "Install cockpit and all dependencies"
-      with_items:
-        - cockpit
-      apt:
-        name: "{{ item }}"
+    - name: Install Cockpit
+      ansible.builtin.apt:
+        name: cockpit
         state: present
         update_cache: yes
+      check_mode: false
 
-    - name: "Configure Firewall for Cockpit"
+    - name: Enable & start Cockpit socket
+      ansible.builtin.systemd_service:
+        name: cockpit.socket
+        state: started
+        enabled: true
+
+    - name: Allow Cockpit (9090/tcp) through ufw
       community.general.ufw:
         rule: allow
-        # name: cockpit
-        to_port: 9090
+        port: "9090"
+        proto: tcp
         state: enabled

@@ -1,20 +1,29 @@
-## Initial APT setup for debian based servers.
+## Initial APT setup for Debian 13 (Trixie) servers.
 ---
 - name: Set the APT Sources
-  hosts: "*"
+  hosts: init
   become: true
   tasks:
-    - name: Remove the CD Rom Sources
-      ansible.builtin.apt_repository:
-        repo: "deb cdrom:[Debian GNU/Linux 12.11.0 _Bookworm_ - Official amd64 DVD Binary-1 with firmware 20250517-09:52]/ bookworm contrib main non-free-firmware"
+    - name: Comment out any CD-ROM source in /etc/apt/sources.list (legacy layout)
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list
+        regexp: '^(deb\s+cdrom:.*)$'
+        replace: '# \1'
+      failed_when: false
+
+    - name: Remove CD-ROM URI from deb822 sources (Trixie default layout)
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^URIs:\s*cdrom:.*$'
         state: absent
-        update_cache: true
+      failed_when: false
 
 - name: Update the servers
-  hosts: "*"
+  hosts: init
   become: true
   tasks:
-    - name: Update
-      apt:
+    - name: Update apt cache & upgrade packages
+      ansible.builtin.apt:
         update_cache: yes
-        upgrade: yes
+        upgrade: dist
+        cache_valid_time: 3600

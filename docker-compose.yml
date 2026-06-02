@@ -5,7 +5,7 @@ services:
       context: ./
       dockerfile: Dockerfile
       args:
-        SOME_ARG: ${SOME_ARG-debian:bookworm}
+        SOME_ARG: ${SOME_ARG-debian:trixie}
     environment:
       ANSIBLE_ROLES_PATH: "./roles"
       ANSIBLE_COLLECTIONS_PATHS: "./collections"

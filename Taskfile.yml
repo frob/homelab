@@ -1,0 +1,174 @@
+version: "3"
+
+vars:
+  COMPOSE: docker compose
+  RUN: docker compose run --rm ansible
+  PLAYBOOK: setup-debian.yml
+  INVENTORY: inventory
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  init:
+    desc: >
+      One-time bootstrap. Builds the ansible runner container image and
+      installs the Ansible collections listed in requirements.yml into
+      ./collections (mounted into the container at runtime). Run this
+      after a fresh clone or whenever requirements.yml changes.
+    cmds:
+      - task: build:container
+      - task: install:collections
+
+  build:container:
+    desc: >
+      Build the ansible runner Docker image used by every other task.
+      The image is defined by Dockerfile (debian:trixie + ansible +
+      sshpass) and is referenced from docker-compose.yml.
+    cmds:
+      - "{{.COMPOSE}} build ansible"
+
+  install:collections:
+    desc: >
+      Install ansible-galaxy collections (ansible.posix,
+      community.general, community.docker) from requirements.yml into
+      ./collections inside the container. Idempotent — re-run after
+      editing requirements.yml.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-galaxy collection install -r requirements.yml -p ./collections"
+
+  lint:
+    desc: >
+      Run ansible-lint against the top-level playbook. Catches deprecated
+      module names, unsafe shell usage, and style issues. Non-zero exit
+      means lint failed.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-lint {{.PLAYBOOK}}"
+
+  check:
+    desc: >
+      Syntax-check every imported playbook without contacting any host.
+      Fast (a few seconds) and runs offline. Use this before pushing
+      changes.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --syntax-check"
+
+  test:
+    desc: >
+      Dry-run the full playbook against the inventory in --check mode.
+      Connects to the target host over SSH but makes no changes; reports
+      what would change. Requires SSH access to the host(s) in
+      ./inventory and the user_ssh_key secret to exist at ~/.ssh/id_rsa.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --check --diff {{.CLI_ARGS}}"
+
+  ping:
+    desc: >
+      Verify SSH connectivity and become privileges to every host in
+      ./inventory. Run this first when debugging — if ping fails, no
+      playbook will succeed.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible -i {{.INVENTORY}} all -m ping {{.CLI_ARGS}}"
+
+  facts:
+    desc: >
+      Gather and print Ansible facts for every host. Useful for
+      discovering the real network interface name
+      (ansible_default_ipv4.interface) before setting network_interface
+      in group_vars/init.yml.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible -i {{.INVENTORY}} all -m setup {{.CLI_ARGS}}"
+
+  shell:
+    desc: >
+      Open an interactive bash shell inside the ansible runner container
+      with the repo mounted at /ansible. Use for ad-hoc ansible / ssh
+      commands.
+    deps: [build:container]
+    cmds:
+      - "{{.COMPOSE}} run --rm ansible bash"
+
+  deploy:all:
+    desc: >
+      Run the complete setup-debian.yml playbook against every host in
+      ./inventory. This is the production deploy — it WILL modify the
+      target host (users, SSH config, static IP, Docker, Portainer,
+      Cockpit). Run `task test` first.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --diff {{.CLI_ARGS}}"
+
+  deploy:init:
+    desc: >
+      Run only the APT init playbook (remove CD-ROM source, apt update +
+      dist-upgrade). Useful as a first step on a freshly installed
+      Debian 13 host.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-init.yml --diff {{.CLI_ARGS}}"
+
+  deploy:basic:
+    desc: >
+      Run only the basic-setup playbook (hostname, admin user + SSH key,
+      unattended-upgrades, timezone, ufw + SSH allow). Idempotent.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-basic.yml --diff {{.CLI_ARGS}}"
+
+  deploy:network:
+    desc: >
+      Run only the static-IP / ifupdown playbook. DANGER — a wrong value
+      in group_vars/init.yml will lock you out of SSH; have console
+      access ready. Change takes effect on next reboot.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-network.yml --diff {{.CLI_ARGS}}"
+
+  deploy:docker:
+    desc: >
+      Run only the Docker install playbook (Docker CE repo, engine,
+      compose plugin, daemon.json with log rotation, docker group).
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-docker.yml --diff {{.CLI_ARGS}}"
+
+  deploy:portainer:
+    desc: >
+      Run only the Portainer playbook. Renders
+      /opt/portainer/docker-compose.yml on the host and brings up
+      Portainer CE on https://<host>:9443.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-portainer.yml --diff {{.CLI_ARGS}}"
+
+  deploy:cockpit:
+    desc: >
+      Run only the Cockpit playbook. Installs Cockpit, enables
+      cockpit.socket, opens ufw 9090/tcp. Access at https://<host>:9090.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-cockpit.yml --diff {{.CLI_ARGS}}"
+
+  clean:
+    desc: >
+      Stop and remove the ansible runner container. Leaves the built
+      image and the ./collections cache intact.
+    cmds:
+      - "{{.COMPOSE}} down --remove-orphans"
+
+  clean:all:
+    desc: >
+      Stop & remove the runner container, delete the built image, and
+      remove the installed ./collections directory. Forces a full
+      rebuild on the next `task init`.
+    cmds:
+      - "{{.COMPOSE}} down --rmi local --volumes --remove-orphans"
+      - rm -rf ./collections

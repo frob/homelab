@@ -1,2 +1,10 @@
-[all]
+# Inventory for *first-run initialization* only.
+#
+# Hosts listed under [init] are freshly installed Debian 13 boxes that the
+# setup-debian.yml playbook will configure (static IP, hardening, Docker,
+# Portainer, Cockpit). Values applied to them come from group_vars/init.yml.
+#
+# After init, the static IP is set and these hosts should be addressed via
+# a separate ops inventory (TODO when management playbooks are added).
+[init]
 192.168.1.143

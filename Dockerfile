@@ -1,6 +1,6 @@
-FROM debian:bookworm
+FROM debian:trixie
 
-ENV DEBAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get -y update
 RUN apt-get -y upgrade
