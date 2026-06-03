@@ -24,8 +24,7 @@ docker_data_root: /var/lib/docker
 docker_log_max_size: "10m"
 docker_log_max_file: "3"
 
-# Portainer
-portainer_image: portainer/portainer-ce:latest
-portainer_data_dir: /opt/portainer/data
-portainer_compose_dir: /opt/portainer
-portainer_https_port: 9443
+# Portainer Agent — managed by an external central Portainer server.
+portainer_agent_image: portainer/agent:latest
+portainer_agent_compose_dir: /opt/portainer-agent
+portainer_agent_port: 9001

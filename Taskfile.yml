@@ -100,8 +100,8 @@ tasks:
     desc: >
       Run the complete setup-debian.yml playbook against every host in
       ./inventory. This is the production deploy — it WILL modify the
-      target host (users, SSH config, static IP, Docker, Portainer,
-      Cockpit). Run `task test` first.
+      target host (users, SSH config, static IP, Docker, Portainer
+      Agent, Cockpit). Run `task test` first.
     deps: [build:container]
     cmds:
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --diff {{.CLI_ARGS}}"
@@ -140,14 +140,15 @@ tasks:
     cmds:
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-docker.yml --diff {{.CLI_ARGS}}"
 
-  deploy:portainer:
+  deploy:portainer-agent:
     desc: >
-      Run only the Portainer playbook. Renders
-      /opt/portainer/docker-compose.yml on the host and brings up
-      Portainer CE on https://<host>:9443.
+      Run only the Portainer Agent playbook. Renders
+      /opt/portainer-agent/docker-compose.yml on the host and brings up
+      the agent on <host>:9001 so a central Portainer server can manage
+      it as a remote environment.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-portainer.yml --diff {{.CLI_ARGS}}"
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-portainer-agent.yml --diff {{.CLI_ARGS}}"
 
   deploy:cockpit:
     desc: >

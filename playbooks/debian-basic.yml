@@ -45,8 +45,8 @@
           IPv4:   \4{{ '{' }}{{ network_interface }}{{ '}' }}
           IPv6:   \6{{ '{' }}{{ network_interface }}{{ '}' }}
           SSH:    ssh {{ admin_user }}@{{ network_address }}
-          Cockpit:   https://{{ network_address }}:9090
-          Portainer: https://{{ network_address }}:{{ portainer_https_port }}
+          Cockpit:        https://{{ network_address }}:9090
+          Portainer Agent: {{ network_address }}:{{ portainer_agent_port }}
 
           \d \t on \l
 
