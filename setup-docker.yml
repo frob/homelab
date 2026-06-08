@@ -1,0 +1,11 @@
+## Plain Docker host — baseline only, no role-specific phase. Run
+## against hosts in the [docker] group via `task deploy:docker`, which
+## passes `-e target_hosts=docker`. Re-running is safe (every phase is
+## idempotent).
+---
+- import_playbook: playbooks/debian-init.yml
+- import_playbook: playbooks/debian-basic.yml
+- import_playbook: playbooks/debian-network.yml
+- import_playbook: playbooks/debian-docker.yml
+- import_playbook: playbooks/debian-portainer-agent.yml
+- import_playbook: playbooks/debian-cockpit.yml

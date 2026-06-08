@@ -1,0 +1,19 @@
+---
+# Group vars for GPU/LLM hosts. The baseline + debian-gpu.yml phase
+# installs the NVIDIA driver and nvidia-container-toolkit and wires the
+# nvidia runtime into Docker as the default so Portainer-deployed
+# stacks transparently see the GPU.
+#
+# Host-identity vars (host_name, network_*) are per-host — put them in
+# host_vars/<host>.yml.
+
+# Driver package. `nvidia-driver` is the consumer/workstation driver
+# from Debian non-free-firmware. For datacenter cards (Tesla/A-series)
+# use `nvidia-tesla-driver` or `nvidia-open-kernel-dkms` as appropriate.
+nvidia_driver_package: nvidia-driver
+
+# Make the nvidia runtime the default Docker runtime so containers
+# don't have to opt in with `--runtime=nvidia`. Set to false if you'd
+# rather request the runtime per-container (Compose `runtime: nvidia`
+# or `deploy.resources.reservations.devices`).
+nvidia_default_runtime: true

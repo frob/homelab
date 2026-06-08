@@ -1,7 +1,7 @@
 ## After APT is configured, this playbook does the initial setup of Linux.
 ---
 - name: Basic Setup — users, SSH, hostname, auto-updates, firewall
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   handlers:
     - name: restart ssh service

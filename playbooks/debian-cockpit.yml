@@ -1,6 +1,6 @@
 ---
 - name: Install and configure Cockpit
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   tasks:
     - name: Install Cockpit

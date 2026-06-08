@@ -4,7 +4,7 @@
 ## <host>:{{ portainer_agent_port }}).
 ---
 - name: Install Portainer Agent
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   tasks:
     - name: Ensure portainer agent compose dir exists

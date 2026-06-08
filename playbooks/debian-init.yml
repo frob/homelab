@@ -1,7 +1,7 @@
 ## Initial APT setup for Debian 13 (Trixie) servers.
 ---
 - name: Set the APT Sources
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   tasks:
     - name: Comment out any CD-ROM source in /etc/apt/sources.list (legacy layout)
@@ -19,7 +19,7 @@
       failed_when: false
 
 - name: Update the servers
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   tasks:
     - name: Update apt cache & upgrade packages

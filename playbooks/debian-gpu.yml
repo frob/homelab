@@ -1,0 +1,105 @@
+## NVIDIA GPU support on Debian 13 (Trixie).
+##
+## Installs the NVIDIA driver from non-free-firmware and the NVIDIA
+## Container Toolkit so Docker (and Portainer-managed stacks) can use
+## the GPU. Assumes:
+##   - PCI passthrough is already configured at the Proxmox layer.
+##   - debian-docker.yml has already installed Docker.
+##
+## A reboot is required after the first driver install before nvidia-smi
+## works. The playbook does not reboot for you.
+---
+- name: Install NVIDIA driver and container runtime
+  hosts: "{{ target_hosts | default('gpu') }}"
+  become: true
+  handlers:
+    - name: restart docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+
+  tasks:
+    # --- Driver ---
+    # The driver lives in contrib + non-free-firmware. Trixie ships the
+    # main archive in deb822 format at /etc/apt/sources.list.d/debian.sources.
+    - name: Enable contrib + non-free-firmware components on Debian archive
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^Components:\s+main\s*$'
+        line: "Components: main contrib non-free-firmware"
+        backrefs: false
+      register: debian_sources_changed
+
+    - name: Refresh apt cache after enabling non-free-firmware
+      ansible.builtin.apt:
+        update_cache: yes
+      when: debian_sources_changed.changed
+      check_mode: false
+
+    - name: Install kernel headers (required for driver DKMS build)
+      ansible.builtin.apt:
+        name: "linux-headers-{{ ansible_kernel }}"
+        state: present
+        update_cache: yes
+      check_mode: false
+
+    - name: Install NVIDIA driver
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_package }}"
+        state: present
+        update_cache: yes
+      check_mode: false
+
+    # --- NVIDIA Container Toolkit ---
+    # Adds the runtime hook Docker uses to expose /dev/nvidia* + the
+    # CUDA libraries into containers.
+    - name: Add NVIDIA Container Toolkit apt repository (deb822)
+      ansible.builtin.deb822_repository:
+        name: nvidia-container-toolkit
+        types: deb
+        uris: "https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH)"
+        suites: "/"
+        signed_by: "https://nvidia.github.io/libnvidia-container/gpgkey"
+        state: present
+        enabled: true
+      check_mode: false
+
+    - name: Refresh apt cache after adding NVIDIA repo
+      ansible.builtin.apt:
+        update_cache: yes
+      check_mode: false
+
+    - name: Install nvidia-container-toolkit
+      ansible.builtin.apt:
+        name: nvidia-container-toolkit
+        state: present
+        update_cache: yes
+      check_mode: false
+
+    # --- Wire toolkit into Docker ---
+    # `nvidia-ctk runtime configure` rewrites /etc/docker/daemon.json,
+    # which would clobber the data-root / log-rotation settings written
+    # by debian-docker.yml. Write the merged daemon.json ourselves.
+    - name: Write Docker daemon config with nvidia runtime
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+        content: |
+          {
+            "data-root": "{{ docker_data_root }}",
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "{{ docker_log_max_size }}",
+              "max-file": "{{ docker_log_max_file }}"
+            },
+            {% if nvidia_default_runtime | bool %}
+            "default-runtime": "nvidia",
+            {% endif %}
+            "runtimes": {
+              "nvidia": {
+                "path": "nvidia-container-runtime",
+                "runtimeArgs": []
+              }
+            }
+          }
+      notify: restart docker

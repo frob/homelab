@@ -1,0 +1,6 @@
+---
+# Group vars for plain Docker hosts (no special hardware).
+#
+# Host-identity vars (host_name, network_*) are per-host — put them in
+# host_vars/<host>.yml. This file holds anything that should apply to
+# every docker-role host.

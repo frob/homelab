@@ -1,13 +1,14 @@
 ---
-# Identity
-admin_user: frob
-timezone: America/Los_Angeles
+# Per-bootstrap values for the host currently in [init]. Because init is
+# one-host-at-a-time, these live in group_vars (not host_vars) and are
+# edited before each new-host run.
 
-# Hostname / domain
+# Hostname (set during basic phase, also used in banners + /etc/hosts).
 host_name: util1
-domain_name: andrsn.org
 
-# Network — static IP via ifupdown
+# Network — static IP via ifupdown. Applied during network phase; takes
+# effect on next reboot. The host's current DHCP IP is what's in
+# inventory under [init].
 network_interface: ens18
 network_address: 192.168.1.50
 network_netmask: 255.255.255.0
@@ -15,16 +16,3 @@ network_cidr: 24
 network_gateway: 192.168.1.1
 network_dns:
   - 192.168.1.1
-
-# SSH
-sshd_PasswordAuthentication: "no"
-
-# Docker daemon
-docker_data_root: /var/lib/docker
-docker_log_max_size: "10m"
-docker_log_max_file: "3"
-
-# Portainer Agent — managed by an external central Portainer server.
-portainer_agent_image: portainer/agent:latest
-portainer_agent_compose_dir: /opt/portainer-agent
-portainer_agent_port: 9001

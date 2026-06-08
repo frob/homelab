@@ -1,0 +1,21 @@
+---
+# Defaults shared by every host group. Role-specific group_vars/<role>.yml
+# files can override any of these, and host_vars/<host>.yml overrides those.
+
+# Identity
+admin_user: frob
+timezone: America/Los_Angeles
+domain_name: andrsn.org
+
+# SSH
+sshd_PasswordAuthentication: "no"
+
+# Docker daemon
+docker_data_root: /var/lib/docker
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+
+# Portainer Agent — managed by an external central Portainer server.
+portainer_agent_image: portainer/agent:latest
+portainer_agent_compose_dir: /opt/portainer-agent
+portainer_agent_port: 9001

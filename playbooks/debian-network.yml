@@ -4,7 +4,7 @@
 ## bring the interface down/up).
 ---
 - name: Configure static IP (ifupdown)
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   tasks:
     - name: Install ifupdown

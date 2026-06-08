@@ -1,0 +1,14 @@
+## GPU / homelab-LLM host. Baseline + NVIDIA driver + nvidia-container
+## -toolkit wired into Docker. Run against hosts in the [gpu] group via
+## `task deploy:gpu`, which passes `-e target_hosts=gpu`. The GPU phase
+## runs last so the driver/toolkit see a fully-configured Docker.
+##
+## A reboot is required after the first run before nvidia-smi works.
+---
+- import_playbook: playbooks/debian-init.yml
+- import_playbook: playbooks/debian-basic.yml
+- import_playbook: playbooks/debian-network.yml
+- import_playbook: playbooks/debian-docker.yml
+- import_playbook: playbooks/debian-portainer-agent.yml
+- import_playbook: playbooks/debian-cockpit.yml
+- import_playbook: playbooks/debian-gpu.yml

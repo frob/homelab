@@ -1,7 +1,7 @@
 ## Install Docker CE on Debian 13 (Trixie).
 ---
 - name: Install and Configure Docker
-  hosts: init
+  hosts: "{{ target_hosts | default('init') }}"
   become: true
   handlers:
     - name: restart docker
