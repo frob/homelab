@@ -1,0 +1,69 @@
+---
+# Molecule scenario: spin up a Debian systemd container, converge it
+# with the docker-host baseline, and assert state. Skips phases that
+# can't realistically run inside a container — debian-init.yml (apt
+# CD-ROM source removal), debian-network.yml (netplan + reboot),
+# debian-gpu.yml (kernel modules), debian-wings.yml (also kernel-ish).
+#
+# Run from the host with `task molecule:test`. The runner container
+# uses the host docker socket to spawn the target as a sibling
+# container, so the target shows up in `docker ps` next to the runner.
+
+driver:
+  name: docker
+
+platforms:
+  - name: homelab-test
+    # geerlingguy's image ships systemd preconfigured for Ansible
+    # container tests. debian13 may not be published yet — swap to
+    # debian12 if pulling fails.
+    image: geerlingguy/docker-debian13-ansible:latest
+    pre_build_image: true
+    privileged: true
+    cgroupns_mode: host
+    command: /lib/systemd/systemd
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /tmp
+    # init  → pulls in group_vars/init.yml (host_name, network_*).
+    # docker → pulls in group_vars/docker.yml (daemon overrides).
+    # The network/init *phases* are still excluded from converge.yml;
+    # we only want their variables, not their reboot-y tasks.
+    groups:
+      - init
+      - docker
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      # Match what the docker-compose service exports so collection
+      # lookup behaves the same inside and outside molecule.
+      collections_path: /ansible/collections
+      stdout_callback: yaml
+  inventory:
+    # Molecule builds its own ephemeral inventory and does NOT see the
+    # repo's group_vars/ (they live next to the top-level playbooks,
+    # not next to converge.yml). Symlink the real ones in so the
+    # baseline resolves admin_user, host_name, docker_*, etc. exactly
+    # as it would on a live host. Absolute path is safe — everything
+    # runs under /ansible inside the runner container.
+    links:
+      group_vars: /ansible/group_vars
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

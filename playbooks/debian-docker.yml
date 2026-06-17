@@ -17,6 +17,9 @@
           - ca-certificates
           - curl
           - gnupg
+          # Required by the deb822_repository module below; not present
+          # on a fresh Debian 13 install unless something else pulls it.
+          - python3-debian
         state: present
         update_cache: yes
 

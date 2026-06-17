@@ -42,21 +42,82 @@ tasks:
 
   lint:
     desc: >
-      Run ansible-lint against the top-level playbook. Catches deprecated
-      module names, unsafe shell usage, and style issues. Non-zero exit
-      means lint failed.
+      Run ansible-lint across every playbook in the repo (top-level
+      setup-*.yml plus playbooks/*.yml). Catches deprecated module
+      names, unsafe shell usage, missing become, and style issues.
+      Non-zero exit means lint failed.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} ansible-lint {{.PLAYBOOK}}"
+      - "{{.RUN}} ansible-lint setup-debian.yml setup-docker.yml setup-gpu.yml setup-wings.yml playbooks/"
+
+  syntax:
+    desc: >
+      Syntax-check every top-level playbook without contacting any
+      host. Fast (a few seconds) and runs offline. Catches YAML and
+      Ansible-language errors that lint won't.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-debian.yml --syntax-check"
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-docker.yml --syntax-check"
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-gpu.yml --syntax-check"
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-wings.yml --syntax-check"
 
   check:
     desc: >
-      Syntax-check every imported playbook without contacting any host.
-      Fast (a few seconds) and runs offline. Use this before pushing
-      changes.
+      Umbrella offline check — runs lint + syntax. Use as a pre-push
+      gate; no host contact, no real changes. For check-mode against
+      live hosts use `task test` instead.
+    cmds:
+      - task: lint
+      - task: syntax
+
+  molecule:test:
+    desc: >
+      Full Molecule run for the default scenario: create a Debian
+      systemd container, converge it with the container-safe baseline
+      phases, assert idempotence, run verify.yml, then destroy.
+      Requires the host docker socket (already mounted in
+      docker-compose.yml). Run `task molecule:converge` instead if you
+      want to keep the target around for poking at.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --syntax-check"
+      - "{{.RUN}} molecule test"
+
+  molecule:converge:
+    desc: >
+      Create the molecule target container and run converge.yml
+      against it, but don't destroy when done. Re-run to test
+      idempotence. Pair with `molecule:login` to inspect state and
+      `molecule:destroy` to clean up.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} molecule converge"
+
+  molecule:verify:
+    desc: >
+      Run verify.yml against the live molecule target (must already
+      be converged). Quick way to iterate on assertions without
+      re-running the full baseline.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} molecule verify"
+
+  molecule:login:
+    desc: >
+      Open a shell inside the running molecule target container.
+      Useful for inspecting state mid-debug (the target is a sibling
+      container of the ansible runner, both on the host docker daemon).
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} molecule login"
+
+  molecule:destroy:
+    desc: >
+      Tear down the molecule target container. Safe to run even if
+      no scenario is currently up.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} molecule destroy"
 
   test:
     desc: >

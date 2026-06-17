@@ -1,0 +1,10 @@
+# Ansible runtime cache (fact cache, retry files, tmp, .lock).
+.ansible/
+
+# Galaxy content installed by `task init` from requirements.yml.
+# Reproducible — don't commit it.
+collections/
+roles/
+
+# Local Claude Code agent state.
+.claude/

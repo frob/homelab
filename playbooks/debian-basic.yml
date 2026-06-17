@@ -20,16 +20,23 @@
 
   tasks:
     # --- Hostname & domain ---
+    # hostnamectl can't write /etc/hostname inside a Docker container
+    # (it's a bind mount → "Device or resource busy"). The tag is inert
+    # on real hosts; only Molecule passes --skip-tags molecule-notest.
     - name: Set system hostname
       ansible.builtin.hostname:
         name: "{{ host_name }}"
+      tags: molecule-notest
 
+    # /etc/hosts is a Docker bind mount too — atomic rename fails with
+    # EBUSY in a container. Inert tag on real hosts (see note above).
     - name: Ensure /etc/hosts contains FQDN entry
       ansible.builtin.lineinfile:
         path: /etc/hosts
         regexp: '^127\.0\.1\.1\s'
         line: "127.0.1.1\t{{ host_name }}.{{ domain_name }} {{ host_name }}"
         state: present
+      tags: molecule-notest
 
     # --- Console banner: show how to reach this box at the login prompt ---
     # \n = hostname, \o = domain, \4{iface} = IPv4 on that interface,

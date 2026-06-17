@@ -1,0 +1,22 @@
+---
+# Layer the container-safe baseline phases onto the molecule target.
+# Anything that touches netplan, kernel modules, or reboot lives in
+# its own playbook and is excluded here. Add scenarios under
+# molecule/<name>/ if you need to exercise role-specific phases
+# (gpu, wings) against richer fixtures.
+
+- import_playbook: ../../playbooks/debian-basic.yml
+  vars:
+    target_hosts: all
+
+- import_playbook: ../../playbooks/debian-docker.yml
+  vars:
+    target_hosts: all
+
+- import_playbook: ../../playbooks/debian-portainer-agent.yml
+  vars:
+    target_hosts: all
+
+- import_playbook: ../../playbooks/debian-cockpit.yml
+  vars:
+    target_hosts: all

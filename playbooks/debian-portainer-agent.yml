@@ -33,11 +33,16 @@
                 - /:/host
       check_mode: false
 
+    # Launching a real container requires overlay2, which can't mount
+    # inside a Docker-in-Docker target (overlay-on-overlay → "invalid
+    # argument"). Skipped under Molecule; verify.yml only asserts the
+    # compose file rendered. Inert tag on real hosts.
     - name: Bring up Portainer Agent stack
       community.docker.docker_compose_v2:
         project_src: "{{ portainer_agent_compose_dir }}"
         state: present
       when: not ansible_check_mode
+      tags: molecule-notest
 
     - name: Allow Portainer Agent port through ufw
       community.general.ufw:

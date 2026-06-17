@@ -8,11 +8,15 @@ services:
         SOME_ARG: ${SOME_ARG-debian:trixie}
     environment:
       ANSIBLE_ROLES_PATH: "./roles"
-      ANSIBLE_COLLECTIONS_PATHS: "./collections"
+      ANSIBLE_COLLECTIONS_PATH: "./collections"
     container_name: "ansible_homelab"
     restart: "no"
     volumes:
       - "./:/ansible:rw,delegated"
+      # Sibling-container access for Molecule's docker driver. Molecule
+      # spawns ephemeral target containers via this socket against the
+      # host's docker daemon; the runner itself stays containerized.
+      - "/var/run/docker.sock:/var/run/docker.sock"
     secrets:
       - user_ssh_key
 
