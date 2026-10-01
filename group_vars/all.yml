@@ -10,12 +10,16 @@ domain_name: andrsn.org
 # SSH
 sshd_PasswordAuthentication: "no"
 
-# Docker daemon
+# Docker daemon. Note: Docker Engine 29+ stores pulled image content
+# under containerd's root (containerd image store), so on hosts with a
+# small /var, override BOTH of these in host_vars to a larger volume.
 docker_data_root: /var/lib/docker
+containerd_data_root: /var/lib/containerd
 docker_log_max_size: "10m"
 docker_log_max_file: "3"
 
 # Portainer Agent — managed by an external central Portainer server.
-portainer_agent_image: portainer/agent:latest
+# Pinned to the current LTS release; bump deliberately.
+portainer_agent_image: portainer/agent:2.39.4
 portainer_agent_compose_dir: /opt/portainer-agent
 portainer_agent_port: 9001

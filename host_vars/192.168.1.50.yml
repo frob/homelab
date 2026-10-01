@@ -1,0 +1,27 @@
+---
+# util1 — bootstrapped via [init] (values carried over from
+# group_vars/init.yml at the time), now a [jellyfin] role host. These
+# keep the baseline re-runs (hostname + static IP phases) idempotent.
+
+host_name: util1
+
+network_interface: ens18
+network_address: 192.168.1.50
+network_netmask: 255.255.255.0
+network_cidr: 24
+network_gateway: 192.168.1.1
+network_dns:
+  - 192.168.1.1
+
+# This VM's /var is a tiny 2.2G partition — too small for container
+# images — while sda7 gives /srv 15.4G. Keep Docker + containerd
+# storage there (both matter: Docker 29's containerd image store puts
+# pulled image content under the containerd root).
+docker_data_root: /srv/docker
+containerd_data_root: /srv/containerd
+
+# Jellyfin's config/metadata also outgrows the 5.4G root partition
+# (10.11+ refuses to start with <2GiB free at /config/data). Compose
+# file stays at /opt/jellyfin; only the data moves.
+jellyfin_config_dir: /srv/jellyfin/config
+jellyfin_cache_dir: /srv/jellyfin/cache

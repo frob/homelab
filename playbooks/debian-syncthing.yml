@@ -1,0 +1,97 @@
+## Syncthing on Debian 13 (Trixie).
+##
+## Renders a docker-compose stack for the official Syncthing image and
+## brings it up. Assumes debian-docker.yml has already installed
+## Docker. The media library ({{ jellyfin_media_dir }}) is mounted
+## read-write at /media so Syncthing can receive library updates and
+## replicate them to backup peers.
+##
+## Device pairing and folder setup happen in the GUI
+## (https://<host>:{{ syncthing_gui_port }}) out-of-band — add /media
+## as a folder there. When the library sits on NFS, disable "Watch for
+## Changes" on the folder (inotify doesn't propagate over NFS) and rely
+## on periodic rescans.
+---
+- name: Install Syncthing
+  hosts: "{{ target_hosts | default('jellyfin') }}"
+  become: true
+  tasks:
+    - name: Ensure syncthing compose dir exists
+      ansible.builtin.file:
+        path: "{{ syncthing_compose_dir }}"
+        state: directory
+        mode: "0755"
+      check_mode: false
+
+    # Syncthing drops privileges to syncthing_uid inside the container
+    # and writes its cert + config here — root-owned means crash-loop.
+    - name: Ensure syncthing config dir is writable by the syncthing user
+      ansible.builtin.file:
+        path: "{{ syncthing_config_dir }}"
+        state: directory
+        owner: "{{ syncthing_uid }}"
+        group: "{{ syncthing_gid }}"
+        mode: "0755"
+      check_mode: false
+
+    - name: Render Syncthing docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ syncthing_compose_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          ---
+          services:
+            syncthing:
+              image: {{ syncthing_image }}
+              container_name: syncthing
+              restart: unless-stopped
+              environment:
+                PUID: "{{ syncthing_uid }}"
+                PGID: "{{ syncthing_gid }}"
+              ports:
+                - "{{ syncthing_gui_port }}:8384"
+                - "{{ syncthing_sync_port }}:22000/tcp"
+                - "{{ syncthing_sync_port }}:22000/udp"
+                - "{{ syncthing_discovery_port }}:21027/udp"
+              volumes:
+                - {{ syncthing_config_dir }}:/var/syncthing/config
+                - {{ jellyfin_media_dir }}:/media
+      check_mode: false
+
+    # Launching a real container requires overlay2, which can't mount
+    # inside a Docker-in-Docker target (overlay-on-overlay → "invalid
+    # argument"). Skipped under Molecule; inert tag on real hosts.
+    - name: Bring up Syncthing stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ syncthing_compose_dir }}"
+        state: present
+      when: not ansible_check_mode
+      tags: molecule-notest
+
+    - name: Allow Syncthing GUI port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ syncthing_gui_port }}"
+        proto: tcp
+        state: enabled
+
+    - name: Allow Syncthing sync port through ufw (tcp)
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ syncthing_sync_port }}"
+        proto: tcp
+        state: enabled
+
+    - name: Allow Syncthing sync port through ufw (udp)
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ syncthing_sync_port }}"
+        proto: udp
+        state: enabled
+
+    - name: Allow Syncthing local discovery port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ syncthing_discovery_port }}"
+        proto: udp
+        state: enabled

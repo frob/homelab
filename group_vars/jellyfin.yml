@@ -1,0 +1,60 @@
+---
+# Group vars for Jellyfin media hosts. The baseline + debian-jellyfin.yml
+# phase renders a docker-compose stack for the custom Jellyfin image and
+# brings it up. Getting media onto the host (NFS mount, rsync, etc.) is
+# out of scope — the playbook only guarantees the mount point exists.
+#
+# Host-identity vars (host_name, network_*) are per-host — put them in
+# host_vars/<host>.yml.
+
+# Custom Jellyfin image, pinned to a release tag; bump deliberately and
+# roll out with `task deploy:jellyfin-only`.
+jellyfin_image: frob/cuddlefish:10.11.11
+
+# Where the compose file and Jellyfin's own state live on the host.
+# Config + cache are bind mounts under the compose dir so a single
+# directory backs up the whole deployment.
+jellyfin_compose_dir: /opt/jellyfin
+jellyfin_config_dir: /opt/jellyfin/config
+jellyfin_cache_dir: /opt/jellyfin/cache
+
+# Host directory mounted read-only into the container at /media.
+jellyfin_media_dir: /srv/media
+
+# NFS-backed library. When true, the role deploy runs the
+# debian-nfs-media.yml phase, mounting jellyfin_nfs_src at
+# jellyfin_media_dir (persisted in /etc/fstab) before the containers
+# come up. EDIT jellyfin_nfs_src — the deploy refuses the placeholder.
+# The export must be writable by this host: Syncthing writes to it.
+jellyfin_media_nfs: true
+jellyfin_nfs_src: "192.168.1.40:/mnt/data2/Jellyfin"
+jellyfin_nfs_opts: "rw,noatime,_netdev"
+
+# Syncthing — keeps the media library up-to-date and replicated to
+# backup peers. Config lives under /opt/syncthing; the media dir is
+# mounted read-write at /media. Folder + device setup happens in the
+# GUI (https://<host>:8384). With the library on NFS, turn OFF "Watch
+# for Changes" on the folder — inotify doesn't work over NFS — and
+# rely on periodic rescans.
+syncthing_image: syncthing/syncthing:2.1.2
+syncthing_compose_dir: /opt/syncthing
+syncthing_config_dir: /opt/syncthing/config
+syncthing_gui_port: 8384
+syncthing_sync_port: 22000
+syncthing_discovery_port: 21027
+# UID/GID syncthing runs as — must be able to write the NFS export.
+syncthing_uid: 1000
+syncthing_gid: 1000
+
+# Ports opened in ufw. 8096/tcp is the web UI + API; 7359/udp lets
+# Jellyfin clients on the LAN auto-discover the server.
+jellyfin_http_port: 8096
+jellyfin_discovery_port: 7359
+
+# NVIDIA hardware transcoding. When true, setup-jellyfin.yml pulls in
+# the debian-gpu.yml phase (driver + container toolkit — reboot needed
+# after the first run) and the compose file requests the nvidia runtime
+# explicitly. Requires the nvidia_* vars below.
+jellyfin_enable_gpu: false
+# nvidia_driver_package: nvidia-driver
+# nvidia_default_runtime: false  # compose sets `runtime: nvidia` itself

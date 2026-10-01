@@ -1,0 +1,49 @@
+## NFS-backed media library.
+##
+## Mounts an NFS export at {{ jellyfin_media_dir }} (persisted in
+## /etc/fstab) so Jellyfin serves the library from the NAS and
+## Syncthing can sync it. Imported by setup-jellyfin.yml when
+## jellyfin_media_nfs is true — edit jellyfin_nfs_src in
+## group_vars/jellyfin.yml first.
+##
+## The export must allow read-write from this host (Syncthing writes
+## to it); Jellyfin's own bind mount stays read-only regardless.
+---
+- name: Mount NFS media library
+  hosts: "{{ target_hosts | default('jellyfin') }}"
+  become: true
+  tasks:
+    - name: Refuse to run with the placeholder NFS source
+      ansible.builtin.assert:
+        that:
+          - jellyfin_nfs_src is defined
+          - "'CHANGEME' not in jellyfin_nfs_src"
+        fail_msg: >-
+          Set jellyfin_nfs_src in group_vars/jellyfin.yml to your real
+          NFS export (e.g. nas.andrsn.org:/volume1/media) before
+          deploying with jellyfin_media_nfs enabled.
+
+    - name: Install NFS client
+      ansible.builtin.apt:
+        name: nfs-common
+        state: present
+        update_cache: true
+      check_mode: false
+
+    - name: Ensure media mount point exists
+      ansible.builtin.file:
+        path: "{{ jellyfin_media_dir }}"
+        state: directory
+        mode: "0755"
+      check_mode: false
+
+    # `mounted` writes the fstab entry and mounts immediately, so the
+    # library is live before the container phases run.
+    - name: Mount NFS export at the media dir (persistent)
+      ansible.posix.mount:
+        path: "{{ jellyfin_media_dir }}"
+        src: "{{ jellyfin_nfs_src }}"
+        fstype: nfs
+        opts: "{{ jellyfin_nfs_opts }}"
+        state: mounted
+      tags: molecule-notest

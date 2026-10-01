@@ -1,0 +1,23 @@
+## Jellyfin media host. Baseline + (optional) NVIDIA GPU phase +
+## (optional) NFS media mount + the Jellyfin container (custom
+## frob/cuddlefish image) + Syncthing (library sync/backup). Run
+## against hosts in the [jellyfin] group via `task deploy:jellyfin`,
+## which passes `-e target_hosts=jellyfin`.
+##
+## Hardware transcoding: set jellyfin_enable_gpu: true (plus the
+## nvidia_* vars) in group_vars/jellyfin.yml to pull in the NVIDIA
+## driver phase. A reboot is required after the first GPU run before
+## transcoding works.
+---
+- import_playbook: playbooks/debian-init.yml
+- import_playbook: playbooks/debian-basic.yml
+- import_playbook: playbooks/debian-network.yml
+- import_playbook: playbooks/debian-docker.yml
+- import_playbook: playbooks/debian-portainer-agent.yml
+- import_playbook: playbooks/debian-cockpit.yml
+- import_playbook: playbooks/debian-gpu.yml
+  when: jellyfin_enable_gpu | default(false) | bool
+- import_playbook: playbooks/debian-nfs-media.yml
+  when: jellyfin_media_nfs | default(false) | bool
+- import_playbook: playbooks/debian-jellyfin.yml
+- import_playbook: playbooks/debian-syncthing.yml

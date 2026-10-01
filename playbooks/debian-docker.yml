@@ -4,6 +4,13 @@
   hosts: "{{ target_hosts | default('init') }}"
   become: true
   handlers:
+    # Ordered: containerd must bounce before docker so dockerd
+    # reconnects to a containerd already using the new root.
+    - name: restart containerd
+      ansible.builtin.systemd_service:
+        name: containerd
+        state: restarted
+
     - name: restart docker
       ansible.builtin.systemd_service:
         name: docker
@@ -54,6 +61,23 @@
         state: present
         update_cache: yes
       check_mode: false
+
+    # Docker Engine 29+ uses the containerd image store, so pulled
+    # image content lands under containerd's root — daemon.json's
+    # data-root alone doesn't govern image disk usage. Keep the two
+    # roots on the same (big enough) filesystem. Top-level TOML keys
+    # must precede any [section], hence insertbefore: BOF.
+    - name: Configure containerd data root
+      ansible.builtin.lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^#?\s*root\s*='
+        line: 'root = "{{ containerd_data_root }}"'
+        insertbefore: BOF
+        create: true
+        mode: "0644"
+      notify:
+        - restart containerd
+        - restart docker
 
     - name: Ensure /etc/docker exists
       ansible.builtin.file:

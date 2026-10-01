@@ -48,7 +48,7 @@ tasks:
       Non-zero exit means lint failed.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} ansible-lint setup-debian.yml setup-docker.yml setup-gpu.yml setup-wings.yml playbooks/"
+      - "{{.RUN}} ansible-lint setup-debian.yml setup-docker.yml setup-gpu.yml setup-wings.yml setup-jellyfin.yml playbooks/"
 
   syntax:
     desc: >
@@ -61,6 +61,7 @@ tasks:
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-docker.yml --syntax-check"
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-gpu.yml --syntax-check"
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-wings.yml --syntax-check"
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-jellyfin.yml --syntax-check"
 
   check:
     desc: >
@@ -137,6 +138,17 @@ tasks:
     deps: [build:container]
     cmds:
       - "{{.RUN}} ansible -i {{.INVENTORY}} all -m ping {{.CLI_ARGS}}"
+
+  adhoc:
+    desc: >
+      Run an ad-hoc ansible module against inventory hosts. Pass the
+      module and args after `--`, e.g.
+      `task adhoc -- -m command -a uptime --limit 192.168.1.50`.
+      Connects as the remote_user from ansible.cfg; add --become as
+      needed.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible -i {{.INVENTORY}} all {{.CLI_ARGS}}"
 
   facts:
     desc: >
@@ -267,6 +279,50 @@ tasks:
     deps: [build:container]
     cmds:
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-wings.yml -e target_hosts=wings --diff {{.CLI_ARGS}}"
+
+  deploy:jellyfin:
+    desc: >
+      Run setup-jellyfin.yml against every host in the [jellyfin] group:
+      baseline + NFS media mount (when jellyfin_media_nfs) + the
+      Jellyfin container (frob/cuddlefish) serving media read-only from
+      /srv/media + Syncthing keeping the library synced/backed up. Set
+      jellyfin_enable_gpu in group_vars/jellyfin.yml to also run the
+      NVIDIA phase for hardware transcoding.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} setup-jellyfin.yml -e target_hosts=jellyfin --diff {{.CLI_ARGS}}"
+
+  deploy:jellyfin-only:
+    desc: >
+      Run only the Jellyfin phase (debian-jellyfin.yml) against the
+      [jellyfin] group. Skips the baseline — use this to roll out a new
+      frob/cuddlefish image or compose change on an already-deployed
+      host.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-jellyfin.yml -e target_hosts=jellyfin --diff {{.CLI_ARGS}}"
+
+  deploy:nfs-media:
+    desc: >
+      Run only the NFS media-mount phase (debian-nfs-media.yml) against
+      the [jellyfin] group. Installs nfs-common and mounts
+      jellyfin_nfs_src at the media dir (persisted in /etc/fstab).
+      Refuses to run until jellyfin_nfs_src is set to a real export in
+      group_vars/jellyfin.yml.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-nfs-media.yml -e target_hosts=jellyfin --diff {{.CLI_ARGS}}"
+
+  deploy:syncthing:
+    desc: >
+      Run only the Syncthing phase (debian-syncthing.yml) against the
+      [jellyfin] group. Renders /opt/syncthing/docker-compose.yml,
+      brings the container up with the media dir mounted read-write at
+      /media, and opens ufw 8384/tcp (GUI), 22000/tcp+udp (sync),
+      21027/udp (discovery). Folder + device pairing happens in the GUI.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} playbooks/debian-syncthing.yml -e target_hosts=jellyfin --diff {{.CLI_ARGS}}"
 
   clean:
     desc: >

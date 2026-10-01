@@ -1,0 +1,80 @@
+## Jellyfin media server on Debian 13 (Trixie).
+##
+## Renders a docker-compose stack for the custom Jellyfin image
+## ({{ jellyfin_image }}) and brings it up. Assumes debian-docker.yml
+## has already installed Docker.
+##
+## Media is served from {{ jellyfin_media_dir }} on the host, mounted
+## read-only into the container at /media. Populating that directory
+## (NFS mount, rsync, etc.) is out of scope here.
+##
+## For NVIDIA transcoding set jellyfin_enable_gpu: true in
+## group_vars/jellyfin.yml — setup-jellyfin.yml then also runs the
+## debian-gpu.yml phase, and this compose file requests the nvidia
+## runtime.
+---
+- name: Install Jellyfin
+  hosts: "{{ target_hosts | default('jellyfin') }}"
+  become: true
+  tasks:
+    - name: Ensure jellyfin directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ jellyfin_compose_dir }}"
+        - "{{ jellyfin_config_dir }}"
+        - "{{ jellyfin_cache_dir }}"
+        - "{{ jellyfin_media_dir }}"
+      check_mode: false
+
+    - name: Render Jellyfin docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ jellyfin_compose_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          ---
+          services:
+            jellyfin:
+              image: {{ jellyfin_image }}
+              container_name: jellyfin
+              restart: unless-stopped
+          {% if jellyfin_enable_gpu | bool %}
+              runtime: nvidia
+              environment:
+                NVIDIA_VISIBLE_DEVICES: all
+                NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+          {% endif %}
+              ports:
+                - "{{ jellyfin_http_port }}:8096"
+                - "{{ jellyfin_discovery_port }}:7359/udp"
+              volumes:
+                - {{ jellyfin_config_dir }}:/config
+                - {{ jellyfin_cache_dir }}:/cache
+                - {{ jellyfin_media_dir }}:/media:ro
+      check_mode: false
+
+    # Launching a real container requires overlay2, which can't mount
+    # inside a Docker-in-Docker target (overlay-on-overlay → "invalid
+    # argument"). Skipped under Molecule; inert tag on real hosts.
+    - name: Bring up Jellyfin stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ jellyfin_compose_dir }}"
+        state: present
+      when: not ansible_check_mode
+      tags: molecule-notest
+
+    - name: Allow Jellyfin web port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ jellyfin_http_port }}"
+        proto: tcp
+        state: enabled
+
+    - name: Allow Jellyfin client discovery port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ jellyfin_discovery_port }}"
+        proto: udp
+        state: enabled

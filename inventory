@@ -13,7 +13,8 @@
 # the role-specific phase on top — idempotent, so re-runs are safe.
 
 [init]
-192.168.1.143
+# (empty — 192.168.1.143 finished bootstrap as util1 and moved to
+# [jellyfin] at its static IP)
 
 # Plain Docker hosts — baseline + Portainer Agent. No special hardware.
 [docker]
@@ -30,3 +31,9 @@
 # the host out-of-band; Ansible only sets up the runtime + firewall.
 [wings]
 # wings1.andrsn.org
+
+# Jellyfin media hosts — baseline + the custom Jellyfin container
+# (frob/cuddlefish) with media served read-only from /srv/media. Set
+# jellyfin_enable_gpu in group_vars/jellyfin.yml for NVIDIA transcoding.
+[jellyfin]
+192.168.1.50  # util1 — identity/network vars in host_vars/192.168.1.50.yml

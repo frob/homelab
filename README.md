@@ -3,7 +3,8 @@
 Ansible playbooks that take a freshly installed Debian 13 (Trixie) server
 from bare-OS to a usable homelab host and then specialize it into a role:
 plain Docker host, GPU/LLM host (NVIDIA driver + nvidia-container-toolkit),
-or Pterodactyl Wings host. Every host gets the same hardened baseline —
+Pterodactyl Wings host, or Jellyfin media host. Every host gets the same
+hardened baseline —
 admin user with SSH key, static IP, hostname, unattended-upgrades,
 firewall, Docker, Portainer Agent, and Cockpit — and then the role layer
 on top.
@@ -85,7 +86,7 @@ ssh-copy-id frob@192.168.1.143
 
 Hosts move through two stages: a one-time **bootstrap** in the `[init]`
 group, then ongoing management in a **role group** (`[docker]`, `[gpu]`,
-`[wings]`).
+`[wings]`, `[jellyfin]`).
 
 1. Fresh Debian VM → put its DHCP IP under `[init]` in `inventory`, edit
    `group_vars/init.yml` with the host's intended hostname + static IP.
@@ -121,10 +122,11 @@ task test
 task deploy:all
 
 # 7. Reboot the host so the static IP takes effect, then move it from
-#    [init] to its role group in inventory ([docker], [gpu], or [wings]).
+#    [init] to its role group in inventory ([docker], [gpu], [wings],
+#    or [jellyfin]).
 
 # 8. Role deploy — re-runs the baseline plus the role-specific phase.
-task deploy:docker        # or deploy:gpu / deploy:wings
+task deploy:docker        # or deploy:gpu / deploy:wings / deploy:jellyfin
 ```
 
 If `task ping` fails with "Missing sudo password" or "sudo: command not
@@ -163,6 +165,8 @@ $ task
 * deploy:gpu-only:          Just the NVIDIA phase against [gpu]…
 * deploy:wings:             Full role deploy against [wings]…
 * deploy:wings-only:        Just the Wings phase against [wings]…
+* deploy:jellyfin:          Full role deploy against [jellyfin]…
+* deploy:jellyfin-only:     Just the Jellyfin phase against [jellyfin]…
 * deploy:portainer-agent:   Run only the Portainer Agent phase…
 * deploy:cockpit:           Run only the Cockpit phase…
 * clean:                    Stop and remove the ansible runner container…
@@ -196,6 +200,7 @@ account, and only the admin user is allowed to SSH in.
 - Role phases add their own rules:
   - `gpu` — none beyond baseline.
   - `wings` — `allow 8080/tcp` (panel→wings API), `allow 2022/tcp` (SFTP).
+  - `jellyfin` — `allow 8096/tcp` (web UI), `allow 7359/udp` (client discovery), plus Syncthing: `allow 8384/tcp` (GUI), `allow 22000/tcp+udp` (sync), `allow 21027/udp` (local discovery).
 
 **fail2ban:**
 - `sshd` jail enabled (systemd journal backend)
@@ -232,20 +237,22 @@ To get a root shell after deploy: `sudo -i` from the admin account.
 ├── Dockerfile                    # debian:trixie + ansible + sshpass
 ├── docker-compose.yml            # Wraps the runner; mounts ~/.ssh/id_rsa as secret
 ├── ansible.cfg                   # Points at ./inventory, become_user=frob
-├── inventory                     # [init] for fresh VMs + [docker]/[gpu]/[wings] role groups
+├── inventory                     # [init] for fresh VMs + [docker]/[gpu]/[wings]/[jellyfin] role groups
 ├── requirements.yml              # ansible-galaxy collections needed
 ├── group_vars/
 │   ├── all.yml                   # Defaults shared by every group
 │   ├── init.yml                  # Bootstrap identity + static IP for the [init] host
 │   ├── docker.yml                # Plain-docker role overrides
 │   ├── gpu.yml                   # GPU role — driver pkg, default runtime
-│   └── wings.yml                 # Wings role — version, API + SFTP ports
+│   ├── wings.yml                 # Wings role — version, API + SFTP ports
+│   └── jellyfin.yml              # Jellyfin role — image, media dir, ports, GPU flag
 ├── public_keys/
 │   └── id_rsa.pub                # Pushed to the admin user's authorized_keys
 ├── setup-debian.yml              # Bootstrap playbook — targets [init]
 ├── setup-docker.yml              # Role wrapper — baseline against [docker]
 ├── setup-gpu.yml                 # Role wrapper — baseline + GPU phase against [gpu]
 ├── setup-wings.yml               # Role wrapper — baseline + Wings phase against [wings]
+├── setup-jellyfin.yml            # Role wrapper — baseline (+ optional GPU) + Jellyfin against [jellyfin]
 └── playbooks/
     ├── debian-init.yml           # APT sources, dist-upgrade
     ├── debian-basic.yml          # Hostname, user, SSH, unattended-upgrades, ufw
@@ -255,6 +262,9 @@ To get a root shell after deploy: `sudo -i` from the admin account.
     ├── debian-cockpit.yml        # Cockpit on 9090
     ├── debian-gpu.yml            # NVIDIA driver + nvidia-container-toolkit
     ├── debian-wings.yml          # Pterodactyl Wings binary + systemd unit
+    ├── debian-jellyfin.yml       # Jellyfin container (frob/cuddlefish) via compose
+    ├── debian-nfs-media.yml      # NFS mount for the media library (fstab-persistent)
+    ├── debian-syncthing.yml      # Syncthing container — library sync/backup
     └── debian-portainer.yml      # (legacy — standalone Portainer server, not used)
 ```
 
@@ -311,6 +321,23 @@ put per-host values in `host_vars/<host>.yml`.
 | `wings_api_port` | Panel→Wings API (default `8080`) — opened in ufw |
 | `wings_sftp_port` | Wings SFTP server (default `2022`) — opened in ufw |
 
+### `group_vars/jellyfin.yml` — Jellyfin role
+
+| Variable | Purpose |
+|---|---|
+| `jellyfin_image` | Container image, pinned to a release tag (e.g. `frob/cuddlefish:10.11.11`) |
+| `jellyfin_compose_dir` | Where the compose file lives on the host (default `/opt/jellyfin`) |
+| `jellyfin_config_dir`, `jellyfin_cache_dir` | Bind mounts for Jellyfin's `/config` and `/cache` |
+| `jellyfin_media_dir` | Host media directory, mounted read-only at `/media` (default `/srv/media`) |
+| `jellyfin_http_port` | Web UI/API (default `8096`) — opened in ufw |
+| `jellyfin_discovery_port` | LAN client auto-discovery (default `7359/udp`) — opened in ufw |
+| `jellyfin_enable_gpu` | If true, the role deploy also runs the NVIDIA phase and the container gets the `nvidia` runtime for hardware transcoding (set the `nvidia_*` vars too; reboot after first run) |
+| `jellyfin_media_nfs` | If true, the role deploy mounts an NFS export at `jellyfin_media_dir` before the containers start |
+| `jellyfin_nfs_src`, `jellyfin_nfs_opts` | NFS export (`server:/path`) and mount options — the deploy refuses the shipped `CHANGEME` placeholder |
+| `syncthing_image` | Syncthing container image, pinned (e.g. `syncthing/syncthing:2.1.2`) |
+| `syncthing_gui_port`, `syncthing_sync_port`, `syncthing_discovery_port` | GUI (`8384`), sync (`22000` tcp+udp), local discovery (`21027/udp`) — all opened in ufw |
+| `syncthing_uid`, `syncthing_gid` | Account Syncthing runs as — must be able to write the NFS export |
+
 ### Inventory
 
 The inventory has one bootstrap group plus a group per role:
@@ -327,6 +354,9 @@ The inventory has one bootstrap group plus a group per role:
 
 [wings]
 # wings1.andrsn.org
+
+[jellyfin]
+# media1.andrsn.org
 ```
 
 `[init]` is for fresh VMs still on a DHCP lease. Once the static IP is
