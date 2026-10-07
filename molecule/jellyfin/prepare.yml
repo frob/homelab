@@ -1,0 +1,20 @@
+---
+# Fixture prep — runs once after create, before converge. The minimal
+# geerlingguy systemd image ships leaner than a real Debian install, so
+# install the handful of packages the baseline assumes are already
+# present on a freshly-installed host (these come from the Debian
+# installer / our server-bootstrap.sh on real machines, not from any
+# baseline phase). Keep this list to genuine base-system gaps — anything
+# a baseline phase is supposed to install belongs in that phase, not here.
+
+- name: Prepare molecule target
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install base packages the minimal image lacks
+      ansible.builtin.apt:
+        name:
+          - openssh-client   # provides ssh-keygen (Create admin user)
+          - openssh-server   # provides /etc/ssh/sshd_config (SSH hardening)
+        state: present
+        update_cache: true

@@ -1,0 +1,67 @@
+---
+# Molecule scenario: the Jellyfin role phase.
+#
+# The `default` scenario deliberately covers only the baseline, so
+# nothing was exercising debian-jellyfin.yml — and its compose file is
+# a Jinja-rendered heredoc with two conditional blocks
+# (jellyfin_enable_gpu, jellyfin_transcode_tmpfs). A typo in there
+# renders invalid YAML that nothing catches until a live deploy leaves
+# the stack down. This scenario renders it in a container and parses
+# the result.
+#
+# Run with `task molecule:test SCENARIO=jellyfin`.
+
+driver:
+  name: docker
+
+platforms:
+  - name: homelab-test-jellyfin
+    image: geerlingguy/docker-debian13-ansible:latest
+    pre_build_image: true
+    privileged: true
+    cgroupns_mode: host
+    command: /lib/systemd/systemd
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /tmp
+    # Same trick as the default scenario — join the groups whose
+    # group_vars the phases need, without running their reboot-y
+    # phases. `jellyfin` is the one that matters here: it carries
+    # jellyfin_image, the *_dir paths and the tmpfs knobs.
+    groups:
+      - init
+      - docker
+      - jellyfin
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      collections_path: /ansible/collections
+      stdout_callback: yaml
+  # debian-jellyfin.yml tags its `docker compose up` task
+  # molecule-notest: overlay2 can't mount inside a Docker-in-Docker
+  # target. The tag was inert until now because no scenario skipped
+  # it. Rendering the compose file is the point here, not running it.
+  options:
+    skip-tags: molecule-notest
+  inventory:
+    links:
+      group_vars: /ansible/group_vars
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

@@ -9,6 +9,11 @@ services:
     environment:
       ANSIBLE_ROLES_PATH: "./roles"
       ANSIBLE_COLLECTIONS_PATH: "./collections"
+      # Editor ansible-vault opens for `task vault:edit`. Deliberately
+      # NOT ${EDITOR} — inheriting the host's would point at something
+      # (nvim, helix) that isn't installed in this image. Override with
+      # ANSIBLE_EDITOR, and add the package to Dockerfile if you do.
+      EDITOR: ${ANSIBLE_EDITOR:-nano}
     container_name: "ansible_homelab"
     restart: "no"
     volumes:
@@ -19,7 +24,24 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
     secrets:
       - user_ssh_key
+      - vault_pass
 
 secrets:
+  # Private key the runner uses to reach managed hosts. Override the
+  # path with ANSIBLE_SSH_KEY (export it, or put it in a .env beside
+  # this file) when your key isn't the default ed25519 one. Compose
+  # fails the container create — not the playbook — if it's missing.
   user_ssh_key:
-    file: ~/.ssh/id_rsa
+    file: ${ANSIBLE_SSH_KEY:-~/.ssh/id_ed25519}
+
+  # Ansible Vault password, used to decrypt group_vars/all/vault.yml
+  # (which carries ansible_become_password). ansible.cfg points
+  # vault_password_file at the mounted secret, so no task needs a
+  # --vault-password-file flag. Override the host path with
+  # ANSIBLE_VAULT_PASS. `task vault:init` generates one if absent (a
+  # dep of build:container, so it self-heals): compose fails container
+  # create on a missing secret file, and ansible rejects an EMPTY vault
+  # password file on every run even with nothing encrypted — so the
+  # file must exist AND be non-empty before any task works.
+  vault_pass:
+    file: ${ANSIBLE_VAULT_PASS:-~/.config/homelab/vault-pass}

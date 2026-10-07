@@ -5,6 +5,24 @@ vars:
   RUN: docker compose run --rm ansible
   PLAYBOOK: setup-debian.yml
   INVENTORY: inventory
+  # Ansible Vault password file on the HOST. Mounted into the runner as
+  # the `vault_pass` secret by docker-compose.yml, which is where
+  # ansible.cfg reads it from. Lives outside the repo on purpose — this
+  # is a public repo and a password file has no business in the tree,
+  # gitignored or not. Override the host path with ANSIBLE_VAULT_PASS.
+  VAULT_PASS_FILE: '{{.HOME}}/.config/homelab/vault-pass'
+  # vault:edit writes group_vars/all/vault.yml into the bind-mounted
+  # repo while the runner is root, which would leave a root-owned file
+  # in your tree that you'd need sudo to edit or commit. Running the
+  # container as your uid instead doesn't work — uid 1000 has no
+  # /etc/passwd entry in the image and ansible calls
+  # getpass.getuser(), which raises. So stay root and hand the file
+  # back afterwards, taking the target owner from the mount itself.
+  CHOWN_TO_MOUNT: 'chown $(stat -c %u:%g /ansible)'
+  # Molecule scenario under molecule/<name>/. `default` covers the
+  # baseline; `jellyfin` covers the Jellyfin role phase. Override per
+  # invocation: `task molecule:test SCENARIO=jellyfin`.
+  SCENARIO: default
 
 tasks:
   default:
@@ -14,19 +32,63 @@ tasks:
 
   init:
     desc: >
-      One-time bootstrap. Builds the ansible runner container image and
-      installs the Ansible collections listed in requirements.yml into
+      One-time bootstrap. Creates the Ansible Vault password file if
+      absent, builds the ansible runner container image, and installs
+      the Ansible collections listed in requirements.yml into
       ./collections (mounted into the container at runtime). Run this
       after a fresh clone or whenever requirements.yml changes.
     cmds:
+      - task: vault:init
       - task: build:container
       - task: install:collections
+
+  vault:init:
+    desc: >
+      Generate the Ansible Vault password file at
+      ~/.config/homelab/vault-pass (mode 0600) if it doesn't exist.
+      Writes 48 random bytes, base64 — nothing to invent or remember,
+      and stronger than a chosen passphrase since it's only ever read
+      by the runner. Back it up: lose it and group_vars/all/vault.yml
+      is unrecoverable.
+
+      Two reasons this must exist before anything else runs, both of
+      which fail confusingly otherwise: compose fails container create
+      on a missing secret file, and ansible rejects an EMPTY vault
+      password file on every invocation even when nothing is
+      encrypted. A dep of build:container, so it self-heals.
+    status:
+      - test -s {{.VAULT_PASS_FILE}}
+    cmds:
+      - mkdir -p $(dirname {{.VAULT_PASS_FILE}})
+      - install -m 0600 /dev/null {{.VAULT_PASS_FILE}}
+      - head -c 48 /dev/urandom | base64 -w0 > {{.VAULT_PASS_FILE}}
+      - 'echo "Generated {{.VAULT_PASS_FILE}} — back it up; group_vars/all/vault.yml cannot be decrypted without it."'
+
+  vault:edit:
+    desc: >
+      Create or edit the encrypted become credentials at
+      group_vars/all/vault.yml. Put the admin user's sudo password in
+      it as `ansible_become_password: <password>`. The file is safe to
+      commit to this public repo — the ciphertext is useless without
+      {{.VAULT_PASS_FILE}}, which never enters the tree.
+    deps: [build:container]
+    cmds:
+      - "{{.COMPOSE}} run --rm ansible sh -c 'if test -f group_vars/all/vault.yml; then ansible-vault edit group_vars/all/vault.yml; else ansible-vault create group_vars/all/vault.yml; fi && {{.CHOWN_TO_MOUNT}} group_vars/all/vault.yml'"
+
+  vault:view:
+    desc: >
+      Decrypt and print group_vars/all/vault.yml. Read-only; use
+      `vault:edit` to change it.
+    deps: [build:container]
+    cmds:
+      - "{{.RUN}} ansible-vault view group_vars/all/vault.yml"
 
   build:container:
     desc: >
       Build the ansible runner Docker image used by every other task.
       The image is defined by Dockerfile (debian:trixie + ansible +
       sshpass) and is referenced from docker-compose.yml.
+    deps: [vault:init]
     cmds:
       - "{{.COMPOSE}} build ansible"
 
@@ -74,15 +136,27 @@ tasks:
 
   molecule:test:
     desc: >
-      Full Molecule run for the default scenario: create a Debian
-      systemd container, converge it with the container-safe baseline
-      phases, assert idempotence, run verify.yml, then destroy.
-      Requires the host docker socket (already mounted in
-      docker-compose.yml). Run `task molecule:converge` instead if you
-      want to keep the target around for poking at.
+      Full Molecule run for one scenario (default: `default`): create a
+      Debian systemd container, converge it, assert idempotence, run
+      verify.yml, then destroy. Pick the scenario with
+      `SCENARIO=jellyfin`. Requires the host docker socket (already
+      mounted in docker-compose.yml). Run `task molecule:converge`
+      instead if you want to keep the target around for poking at.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} molecule test"
+      - "{{.RUN}} molecule test -s {{.SCENARIO}}"
+
+  molecule:test:all:
+    desc: >
+      Run every Molecule scenario in sequence — the baseline
+      (`default`) and the Jellyfin role phase (`jellyfin`). This is the
+      one to run before pushing a change to a playbook or its
+      group_vars.
+    cmds:
+      - task: molecule:test
+        vars: {SCENARIO: default}
+      - task: molecule:test
+        vars: {SCENARIO: jellyfin}
 
   molecule:converge:
     desc: >
@@ -92,7 +166,7 @@ tasks:
       `molecule:destroy` to clean up.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} molecule converge"
+      - "{{.RUN}} molecule converge -s {{.SCENARIO}}"
 
   molecule:verify:
     desc: >
@@ -101,7 +175,7 @@ tasks:
       re-running the full baseline.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} molecule verify"
+      - "{{.RUN}} molecule verify -s {{.SCENARIO}}"
 
   molecule:login:
     desc: >
@@ -110,7 +184,7 @@ tasks:
       container of the ansible runner, both on the host docker daemon).
     deps: [build:container]
     cmds:
-      - "{{.RUN}} molecule login"
+      - "{{.RUN}} molecule login -s {{.SCENARIO}}"
 
   molecule:destroy:
     desc: >
@@ -118,14 +192,15 @@ tasks:
       no scenario is currently up.
     deps: [build:container]
     cmds:
-      - "{{.RUN}} molecule destroy"
+      - "{{.RUN}} molecule destroy -s {{.SCENARIO}}"
 
   test:
     desc: >
       Dry-run the full playbook against the inventory in --check mode.
       Connects to the target host over SSH but makes no changes; reports
       what would change. Requires SSH access to the host(s) in
-      ./inventory and the user_ssh_key secret to exist at ~/.ssh/id_rsa.
+      ./inventory and the user_ssh_key secret to resolve (see
+      ANSIBLE_SSH_KEY in docker-compose.yml).
     deps: [build:container]
     cmds:
       - "{{.RUN}} ansible-playbook -i {{.INVENTORY}} {{.PLAYBOOK}} --check --diff {{.CLI_ARGS}}"

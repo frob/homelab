@@ -1,0 +1,116 @@
+---
+# Post-converge assertions for the Jellyfin phase. The point of this
+# scenario is the rendered compose file, so parse it rather than
+# grepping it — a template change that produces valid-looking text but
+# invalid YAML has to fail here, not on a live host.
+
+- name: Verify Jellyfin phase state
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Jellyfin directories exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: jf_dirs
+      loop:
+        - "{{ jellyfin_compose_dir }}"
+        - "{{ jellyfin_config_dir }}"
+        - "{{ jellyfin_cache_dir }}"
+        - "{{ jellyfin_media_dir }}"
+
+    - name: Assert Jellyfin directories are directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+        fail_msg: "{{ item.item }} missing or not a directory."
+      loop: "{{ jf_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the rendered compose file
+      ansible.builtin.slurp:
+        src: "{{ jellyfin_compose_dir }}/docker-compose.yml"
+      register: jf_compose_raw
+
+    - name: Parse the rendered compose file
+      ansible.builtin.set_fact:
+        jf_compose: "{{ jf_compose_raw.content | b64decode | from_yaml }}"
+
+    # from_yaml above already fails the play on malformed YAML. These
+    # assertions catch the subtler breakage: valid YAML that lost a
+    # key, or nested a conditional block at the wrong depth so it
+    # landed outside the service definition.
+    - name: Assert the service is defined with the pinned image
+      ansible.builtin.assert:
+        that:
+          - jf_compose.services.jellyfin is defined
+          - jf_compose.services.jellyfin.image == jellyfin_image
+          - jf_compose.services.jellyfin.container_name == 'jellyfin'
+          - jf_compose.services.jellyfin.restart == 'unless-stopped'
+        fail_msg: >
+          Rendered compose lost or mangled the jellyfin service:
+          {{ jf_compose | to_nice_yaml }}
+
+    - name: Assert all three bind mounts are present
+      ansible.builtin.assert:
+        that:
+          - "jellyfin_config_dir ~ ':/config' in jf_compose.services.jellyfin.volumes"
+          - "jellyfin_cache_dir ~ ':/cache' in jf_compose.services.jellyfin.volumes"
+          - "jellyfin_media_dir ~ ':/media:ro' in jf_compose.services.jellyfin.volumes"
+        fail_msg: >
+          Bind mounts wrong:
+          {{ jf_compose.services.jellyfin.volumes | to_nice_yaml }}
+
+    - name: Assert both published ports are present
+      ansible.builtin.assert:
+        that:
+          - "jellyfin_http_port ~ ':8096' in jf_compose.services.jellyfin.ports"
+          - "jellyfin_discovery_port ~ ':7359/udp' in jf_compose.services.jellyfin.ports"
+        fail_msg: >
+          Ports wrong:
+          {{ jf_compose.services.jellyfin.ports | to_nice_yaml }}
+
+    # The transcode tmpfs exists to bound a cache that filled /srv and
+    # took unrelated stacks down with it. Assert the cap is actually
+    # there — an unbounded tmpfs would pass a mere "is it mounted"
+    # check while reintroducing the original failure in RAM.
+    - name: Assert transcode tmpfs is declared and capped
+      ansible.builtin.assert:
+        that:
+          - jf_compose.services.jellyfin.tmpfs is defined
+          - jf_compose.services.jellyfin.tmpfs | length == 1
+          - jf_compose.services.jellyfin.tmpfs[0] is match('^/cache/transcodes:.*size=' ~ jellyfin_transcode_tmpfs_size ~ '(,|$)')
+        fail_msg: >
+          Expected a size-capped tmpfs at /cache/transcodes, got:
+          {{ jf_compose.services.jellyfin.tmpfs | default('(none)') }}
+      when: jellyfin_transcode_tmpfs | bool
+
+    - name: Assert no tmpfs is declared when the knob is off
+      ansible.builtin.assert:
+        that:
+          - jf_compose.services.jellyfin.tmpfs is not defined
+        fail_msg: "tmpfs rendered despite jellyfin_transcode_tmpfs being false."
+      when: not (jellyfin_transcode_tmpfs | bool)
+
+    - name: Assert the nvidia runtime appears only when GPU is enabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            (jf_compose.services.jellyfin.runtime | default('')) ==
+            ('nvidia' if (jellyfin_enable_gpu | bool) else '')
+        fail_msg: >
+          runtime key disagrees with jellyfin_enable_gpu
+          ({{ jellyfin_enable_gpu }}).
+
+    - name: Jellyfin ports are allowed through ufw
+      ansible.builtin.command: ufw status
+      register: jf_ufw
+      changed_when: false
+
+    - name: Assert ufw allows the web and discovery ports
+      ansible.builtin.assert:
+        that:
+          - jellyfin_http_port | string in jf_ufw.stdout
+          - jellyfin_discovery_port | string in jf_ufw.stdout
+        fail_msg: "ufw missing Jellyfin rules:\n{{ jf_ufw.stdout }}"

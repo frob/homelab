@@ -10,6 +10,22 @@ domain_name: andrsn.org
 # SSH
 sshd_PasswordAuthentication: "no"
 
+# Sudo. Nearly every task here needs become, and the admin user's sudo
+# is password-gated (it's a plain member of the `sudo` group — see
+# debian-basic.yml). Without a password to offer, every deploy fails
+# with "Missing sudo password".
+#
+# The password lives in group_vars/all/vault.yml as
+# ansible_become_password, encrypted with Ansible Vault. That file is
+# safe to commit to this public repo — the ciphertext is useless
+# without the vault password, which lives OUTSIDE the repo at
+# ~/.config/homelab/vault-pass and is mounted into the runner as the
+# `vault_pass` compose secret.
+#
+# Create or change it with `task vault:edit`. Deliberately NOT a
+# NOPASSWD sudoers rule: the sudo password stays a real second factor,
+# so a stolen SSH key alone doesn't get root.
+
 # Docker daemon. Note: Docker Engine 29+ stores pulled image content
 # under containerd's root (containerd image store), so on hosts with a
 # small /var, override BOTH of these in host_vars to a larger volume.

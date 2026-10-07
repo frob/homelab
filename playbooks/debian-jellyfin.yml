@@ -12,6 +12,9 @@
 ## group_vars/jellyfin.yml — setup-jellyfin.yml then also runs the
 ## debian-gpu.yml phase, and this compose file requests the nvidia
 ## runtime.
+##
+## jellyfin_transcode_tmpfs puts /cache/transcodes on a size-capped
+## tmpfs. Size it against VM RAM, not disk — see group_vars/jellyfin.yml.
 ---
 - name: Install Jellyfin
   hosts: "{{ target_hosts | default('jellyfin') }}"
@@ -53,6 +56,19 @@
                 - {{ jellyfin_config_dir }}:/config
                 - {{ jellyfin_cache_dir }}:/cache
                 - {{ jellyfin_media_dir }}:/media:ro
+          {% if jellyfin_transcode_tmpfs | bool %}
+              # Transcode segments live in RAM, capped. Jellyfin keeps
+              # every HLS segment for the life of a session (backward
+              # seeking), so a full playthrough accumulates the whole
+              # transcoded output — on disk that's unbounded and it
+              # already filled /srv once, taking other stacks down with
+              # it. Capped here, a runaway transcode fails that one
+              # playback instead. Shadows {{ jellyfin_cache_dir }}/transcodes;
+              # the persistent caches (images, imagesbyname, omdb) stay
+              # on disk so artwork survives a restart.
+              tmpfs:
+                - /cache/transcodes:size={{ jellyfin_transcode_tmpfs_size }},mode=1777
+          {% endif %}
       check_mode: false
 
     # Launching a real container requires overlay2, which can't mount

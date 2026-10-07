@@ -46,6 +46,21 @@ syncthing_discovery_port: 21027
 syncthing_uid: 1000
 syncthing_gid: 1000
 
+# Transcode scratch space on a RAM disk. Jellyfin retains every HLS
+# segment for the whole session so backward seeking works, which means
+# one full-length 1080p playthrough at ~8 Mbps writes ~7G — unbounded
+# on disk. Capping it in RAM means a runaway transcode fails that one
+# playback rather than filling the volume and taking the other stacks
+# on the host down with it.
+#
+# size= is a cap, not a reservation: an empty tmpfs costs nothing. But
+# tmpfs pages spill to swap, so keep the cap under what the VM can
+# actually spare — RAM minus the service working set (~2.5G here)
+# minus page-cache headroom. Rough guide: 8G RAM → 3g (partial
+# transcodes only), 16G → 6g (one full movie), 24G → 10g (two).
+jellyfin_transcode_tmpfs: true
+jellyfin_transcode_tmpfs_size: 6g
+
 # Ports opened in ufw. 8096/tcp is the web UI + API; 7359/udp lets
 # Jellyfin clients on the LAN auto-discover the server.
 jellyfin_http_port: 8096

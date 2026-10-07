@@ -83,15 +83,20 @@
         group: "{{ admin_user }}"
         mode: "0700"
 
-    - name: Authorize admin user's public key
+    # Every *.pub in public_keys/ is authorized, so rotating the
+    # workstation key is "drop the new .pub in, re-run this phase" —
+    # and the old key keeps working until you delete its file. Only
+    # public keys live there; it's a public repo.
+    - name: Authorize admin user's public keys
       ansible.builtin.lineinfile:
         path: "/home/{{ admin_user }}/.ssh/authorized_keys"
-        line: "{{ lookup('file', '/ansible/public_keys/id_rsa.pub') | trim }}"
+        line: "{{ lookup('file', item) | trim }}"
         create: true
         owner: "{{ admin_user }}"
         group: "{{ admin_user }}"
         mode: "0600"
         state: present
+      with_fileglob: /ansible/public_keys/*.pub
 
     - name: Add admin user to sudo group
       ansible.builtin.user:
