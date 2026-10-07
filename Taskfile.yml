@@ -30,6 +30,23 @@ tasks:
     cmds:
       - task --list
 
+  # Unlike every other task here, this runs a HOST tool (the `claude` CLI)
+  # interactively rather than a container — hence `interactive: true`, which
+  # hands it the TTY. The container rule still applies to the work it does:
+  # the primer tells it to drive everything through this Taskfile.
+  claude:start:
+    desc: >
+      Start Claude Code seeded with a primer about this repo — the hard rules
+      (containers only, everything through the Taskfile, public repo, git is
+      hands-off), the layout, the SSH/Vault credential model, which test tasks
+      to run, and the gotchas that waste a session. Pass a task for the session
+      after `--`, e.g. `task claude:start -- 'add a phase for restic backups'`.
+      Extra claude flags go in CLAUDE_ARGS, e.g.
+      `CLAUDE_ARGS=--model=opus task claude:start`.
+    interactive: true
+    cmds:
+      - ./scripts/claude-start.sh {{.CLI_ARGS}}
+
   init:
     desc: >
       One-time bootstrap. Creates the Ansible Vault password file if
