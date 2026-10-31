@@ -1,0 +1,16 @@
+---
+# Baseline phases the Panel phase assumes (a user to own the dirs,
+# Docker installed), then the phase under test. Same container-safe
+# exclusions as the other scenarios: no init/network/gpu.
+
+- import_playbook: ../../playbooks/debian-basic.yml
+  vars:
+    target_hosts: all
+
+- import_playbook: ../../playbooks/debian-docker.yml
+  vars:
+    target_hosts: all
+
+- import_playbook: ../../playbooks/debian-pterodactyl-panel.yml
+  vars:
+    target_hosts: all

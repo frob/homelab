@@ -25,3 +25,9 @@ containerd_data_root: /srv/containerd
 # file stays at /opt/jellyfin; only the data moves.
 jellyfin_config_dir: /srv/jellyfin/config
 jellyfin_cache_dir: /srv/jellyfin/cache
+
+# Pterodactyl Panel state (MariaDB data, the panel's var/ and logs).
+# Same reason as the two above: / is 5.4G and /var is a 2.1G partition
+# with 622M free, while sda7 gives /srv 63G with 47G free. A growing
+# game-server database has no business on either small partition.
+pterodactyl_data_dir: /srv/pterodactyl

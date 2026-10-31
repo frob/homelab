@@ -1,0 +1,179 @@
+## Pterodactyl Wings on NixOS.
+##
+## Note the prefix: phases are named for the OS family they target, so
+## this is nixos-*, not debian-*. There is no baseline chain in front of
+## it — apt, ifupdown, ufw and hostnamectl mean nothing here.
+## nixos/modules/base.nix IS the baseline, and it lands in the same
+## switch as the role.
+##
+## Ansible is the transport, not the configuration: it syncs the repo's
+## nixos/ flake to /etc/nixos and runs nixos-rebuild. All the actual
+## state lives in the .nix files, so a converge is reproducible and a
+## new node costs one host directory.
+##
+## After this runs, create the node in the panel and pull its config:
+##
+##   sudo wings configure --panel-url http://util1.andrsn.org:8081 \
+##     --token <token from the panel> --node <node id>
+##   sudo systemctl start wings
+---
+- name: Deploy NixOS Wings host
+  hosts: "{{ target_hosts | default('nixos_wings') }}"
+  become: true
+  vars:
+    nixos_flake_dir: /etc/nixos
+    nixos_secrets_dir: /etc/nixos-secrets
+
+  tasks:
+    # base.nix sets users.mutableUsers = false and references this hash
+    # by path. Without it the admin user ends up with no password, which
+    # means no sudo, which means the *next* run of this playbook can't
+    # become root — a lockout that's tedious to undo from the Proxmox
+    # console. Fail before switching, not after.
+    - name: Assert the vaulted admin password hash is set
+      ansible.builtin.assert:
+        that:
+          - nixos_admin_password_hash | default('') | length > 0
+          - nixos_admin_password_hash is match('^\\$[0-9a-z]+\\$')
+        fail_msg: >
+          nixos_admin_password_hash must be set in
+          group_vars/all/vault.yml to a crypt hash (starts with $y$, $6$
+          or similar) — run `task vault:edit`. Generate one with
+          `task nixos:passwd`. base.nix references it by path because
+          this repo is public; an unset hash means no sudo on the host.
+
+    - name: Assert the host names a flake output
+      ansible.builtin.assert:
+        that:
+          - nixos_host | default('') | length > 0
+        fail_msg: >
+          nixos_host must name this host's nixosConfigurations entry in
+          nixos/flake.nix. Set it in host_vars/<host>.yml.
+
+    - name: Ensure the flake and secrets directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ nixos_flake_dir }}", mode: "0755" }
+        - { path: "{{ nixos_secrets_dir }}", mode: "0700" }
+      check_mode: false
+
+    # ansible.builtin.copy, deliberately, NOT ansible.posix.synchronize:
+    # synchronize needs rsync on the target, and a freshly
+    # hand-installed NixOS doesn't have it until this very switch puts
+    # it there — a chicken-and-egg that would break exactly the first
+    # run. copy goes over SFTP and this tree is a few KB.
+    #
+    # copy doesn't prune files deleted from the repo. That's harmless
+    # here: flake.nix enumerates its imports explicitly, so an orphaned
+    # .nix file on the host is never evaluated.
+    - name: Sync the NixOS flake to the host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../nixos/"
+        dest: "{{ nixos_flake_dir }}/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+      check_mode: false
+
+    # base.nix authorizes every *.pub it finds here, so this keeps the
+    # repo's "drop a key in, re-run the phase" property identical to
+    # debian-basic.yml's.
+    - name: Sync public_keys into the flake
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../public_keys/"
+        dest: "{{ nixos_flake_dir }}/public_keys/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+      check_mode: false
+
+    - name: Install the admin password hash
+      ansible.builtin.copy:
+        content: "{{ nixos_admin_password_hash }}\n"
+        dest: "{{ nixos_secrets_dir }}/admin.pass"
+        owner: root
+        group: root
+        mode: "0400"
+      no_log: true
+      check_mode: false
+
+    # The host's hardware.nix is generated per-machine and pasted into
+    # the repo; the shipped one is a documented placeholder. Switching
+    # with the wrong disks produces a generation that builds fine and
+    # then doesn't boot, which is the worst failure in this whole
+    # playbook. Cheap guard: every by-label/by-uuid/by-id device the
+    # file names must actually exist on this host.
+    - name: Check the device paths in hardware.nix exist on the host
+      ansible.builtin.shell:
+        executable: /bin/sh
+        cmd: |
+          set -eu
+          hw="{{ nixos_flake_dir }}/hosts/{{ nixos_host }}/hardware.nix"
+          test -f "$hw" || { echo "MISSING_FILE $hw"; exit 1; }
+          # No pipe here on purpose: /bin/sh on NixOS is the only shell
+          # guaranteed to exist, and `set -o pipefail` isn't portable to
+          # every sh. Duplicate device paths just get checked twice.
+          missing=""
+          for dev in $(grep -oE '/dev/disk/by-[a-z]+/[^"]+' "$hw"); do
+            [ -e "$dev" ] || missing="$missing $dev"
+          done
+          if [ -n "$missing" ]; then echo "MISSING_DEVICES$missing"; exit 1; fi
+          echo OK
+      register: nixos_hw_check
+      changed_when: false
+      failed_when: false
+
+    - name: Assert hardware.nix matches this host's disks
+      ansible.builtin.assert:
+        that:
+          - nixos_hw_check.rc == 0
+        fail_msg: >
+          hardware.nix for {{ nixos_host }} names devices that don't
+          exist on this host ({{ nixos_hw_check.stdout | trim }}). It is
+          still the shipped placeholder, or it belongs to a different
+          machine. Run `nixos-generate-config --show-hardware-config` on
+          the host and paste the output over
+          nixos/hosts/{{ nixos_host }}/hardware.nix. Switching as-is
+          would build a generation that does not boot.
+
+    # --flake <dir>#<host> rather than relying on the hostname, so the
+    # mapping is explicit and a renamed host fails loudly.
+    #
+    # changed_when on the activation output: nixos-rebuild exits 0 and
+    # prints nothing much when the system is already at that generation,
+    # so keying on rc would report every converge as changed.
+    - name: Rebuild and switch to the flake configuration
+      ansible.builtin.command:
+        cmd: >-
+          nixos-rebuild switch
+          --flake {{ nixos_flake_dir }}#{{ nixos_host }}
+      register: nixos_switch
+      changed_when: >-
+        'switching to configuration' in (nixos_switch.stderr | lower)
+        or 'activating the configuration' in (nixos_switch.stderr | lower)
+      when: not ansible_check_mode
+
+    - name: Report whether wings is waiting on its panel config
+      ansible.builtin.stat:
+        path: /etc/pterodactyl/config.yml
+      register: nixos_wings_config
+
+    # Not a failure — it's the expected state of a node that exists in
+    # Ansible but not yet in the panel. The unit's ConditionPathExists
+    # keeps it inert rather than crash-looping, so say so plainly.
+    - name: Note that wings stays inert until the node is configured
+      ansible.builtin.debug:
+        msg: >-
+          /etc/pterodactyl/config.yml is absent, so the wings unit is
+          installed but inert. Create the node in the panel, then on this
+          host run: sudo wings configure --panel-url
+          {{ pterodactyl_app_url | default('http://util1.' ~ domain_name ~ ':8081') }}
+          --token <token> --node <id> && sudo systemctl start wings
+      when: not nixos_wings_config.stat.exists

@@ -8,3 +8,7 @@ roles/
 
 # Local Claude Code agent state.
 .claude/
+
+# Staging dir for `task nix:check` (nixos/ + public_keys/ assembled
+# into the layout the deploy produces under /etc/nixos). Transient.
+.nix-stage/

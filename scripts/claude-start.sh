@@ -40,18 +40,41 @@ workflow has no Task, add one to Taskfile.yml rather than running it ad-hoc.
 LAYOUT
 - setup-debian.yml   — bootstrap for fresh VMs in [init]; imports every baseline
                        phase.
-- setup-<role>.yml   — per-role (docker, gpu, wings, jellyfin). Each re-runs the
-                       full baseline then layers its phase on top, idempotently.
-- playbooks/debian-<phase>.yml — one playbook per phase, each independently
-                       runnable via its own deploy:* task. Every phase uses
+- setup-<role>.yml   — per-role (docker, gpu, jellyfin, pterodactyl). Each
+                       re-runs the full baseline then layers its phase on top,
+                       idempotently. setup-nixos-wings.yml is the exception —
+                       see NIXOS below.
+- playbooks/<os>-<phase>.yml — one playbook per phase; the prefix names the OS
+                       family (debian-*, nixos-*). Each independently runnable
+                       via its own deploy:* task. Every phase uses
                        hosts: "{{ target_hosts | default(...) }}" so it's
                        reusable across groups.
 - group_vars/all/main.yml — defaults for every group. group_vars/<group>.yml
                        overrides those; host_vars/<host>.yml overrides those.
 - inventory          — [init] for fresh DHCP boxes, then role groups by static
                        IP/FQDN. Hosts move out of [init] after bootstrap.
-- scripts/server-bootstrap.sh — one-time root-side prep run on the target before
-                       Ansible takes over.
+- nixos/             — the flake configuring the NixOS Wings hosts: flake.nix,
+                       modules/base.nix (declarative baseline), modules/wings.nix
+                       (the service), pkgs/wings.nix (the package — nixpkgs has
+                       no pterodactyl anything), hosts/<name>/ per machine.
+- scripts/server-bootstrap.sh — one-time root-side prep run on a Debian target
+                       before Ansible takes over. nixos-bootstrap.sh is the
+                       NixOS equivalent.
+
+NIXOS — the Wings nodes run NixOS, not Debian, and the model differs.
+- Ansible is only the TRANSPORT: playbooks/nixos-wings.yml syncs nixos/ (plus
+  public_keys/) to /etc/nixos, writes the vaulted sudo hash to
+  /etc/nixos-secrets/admin.pass, and runs nixos-rebuild switch. All real state
+  is in the .nix files. No baseline chain — modules/base.nix IS the baseline.
+- Adding a node: copy nixos/hosts/wings1/, paste in its real hardware.nix
+  (nixos-generate-config --show-hardware-config; the shipped one is a
+  placeholder and the phase refuses to switch if its devices don't exist), add
+  it to nixosConfigurations, add the IP under [nixos_wings] + host_vars with
+  nixos_host.
+- Check it with `task nix:check` (evaluates the flake AND builds the wings
+  package, offline) before `task deploy:nixos-wings`.
+- Group names use underscores: [nixos_wings]. Hyphens make ansible warn
+  "Invalid characters were found in group names" on every run.
 
 CREDENTIALS — both are compose secrets, so they exist inside the runner only.
 - SSH: ~/.ssh/id_ed25519 (override: ANSIBLE_SSH_KEY), mounted to
@@ -68,11 +91,15 @@ CREDENTIALS — both are compose secrets, so they exist inside the runner only.
 
 TESTING — run these before considering a playbook change done.
 - `task syntax`            — syntax-check every top-level playbook.
-- `task molecule:test:all` — both Molecule scenarios: `default` (container-safe
-                             baseline phases) and `jellyfin` (the Jellyfin role
-                             phase, which parses the rendered compose file so a
-                             template typo fails in CI rather than on a host).
-                             Single scenario: `task molecule:test SCENARIO=...`.
+- `task molecule:test:all` — all three Molecule scenarios: `default`
+                             (container-safe baseline phases), `jellyfin` and
+                             `pterodactyl` (role phases that parse their
+                             rendered compose files, so a template typo fails
+                             in CI rather than on a host). Single scenario:
+                             `task molecule:test SCENARIO=...`. Does NOT cover
+                             the NixOS host — that's `task nix:check`.
+- `task nix:check`         — evaluate the NixOS flake and build the wings
+                             package. The NixOS half's syntax+molecule.
 - `task check`             — --check --diff dry run against real inventory.
 - `task ping`              — verify SSH + become reach every host. Run this
                              first when debugging; if it fails, nothing else
@@ -90,6 +117,21 @@ GOTCHAS that cost real time
 - Hosts can carry stacks Ansible doesn't manage (deployed via Portainer), so
   disk/RAM assumptions in host_vars may understate real usage. Check the host
   before trusting them.
+- NixOS has no /usr/bin/python3 — group_vars/nixos_wings.yml pins
+  ansible_python_interpreter to /run/current-system/sw/bin/python3. Without it
+  the first task fails with a bare "module failed" naming neither Python nor
+  NixOS.
+- Nix tasks address the flake as `path:./...`. Without the prefix nix resolves
+  the enclosing git work tree as git+file:///homelab, which fails on
+  container-root-vs-host-uid ownership and would evaluate only COMMITTED files.
+- The Pterodactyl Panel's APP_URL must carry its port, and
+  {{ pterodactyl_data_dir }}/var/ is unrecoverable if lost — the image
+  generates APP_KEY/HASHIDS_SALT into var/.env on first boot and every
+  encrypted value in the DB (node tokens, 2FA) depends on it.
+- Molecule writes its own ansible.cfg, so vault_password_file from the repo's
+  ansible.cfg does NOT carry over. Each scenario sets it in
+  config_options.defaults; without it every molecule action dies at
+  "Attempting to decrypt but no vault secrets found".
 
 GIT — managed by the user. Never commit, stage, or otherwise modify the index or
 history. Report load-bearing git-state findings and give the command to run;

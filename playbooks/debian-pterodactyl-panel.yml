@@ -1,0 +1,139 @@
+## Pterodactyl Panel on Debian 13 (Trixie).
+##
+## Renders a docker-compose stack — the panel, a MariaDB it owns, and a
+## Redis for cache/session/queue — and brings it up. Assumes
+## debian-docker.yml has already installed Docker.
+##
+## This is the control plane only. Game servers run on Wings nodes,
+## which are NixOS hosts (see playbooks/nixos-wings.yml); the panel
+## learns about one when you create the node in the UI, and nothing in
+## Ansible connects the two.
+##
+## Follows upstream's docker-compose.example.yml for the pinned panel
+## release, minus the parts this deployment doesn't want: no 443
+## mapping, no certs volume and no LE_EMAIL (plain HTTP on the LAN), no
+## legacy `links:` (the default compose network already resolves service
+## names), and no hardcoded ipam subnet — util1 runs other stacks and a
+## fixed 172.20.0.0/16 is exactly how you collide with Docker's pool.
+##
+## After the first run the panel has no users. Create the first admin
+## interactively on the host — it prompts, so `task adhoc` can't do it:
+##
+##   docker compose -f /opt/pterodactyl/docker-compose.yml \
+##     exec panel php artisan p:user:make
+---
+- name: Install Pterodactyl Panel
+  hosts: "{{ target_hosts | default('pterodactyl') }}"
+  become: true
+  tasks:
+    # Both live in group_vars/all/vault.yml. Undefined here means the
+    # vault wasn't edited — fail now with a readable message rather than
+    # rendering a compose file with empty passwords, where the symptom
+    # is a MariaDB container crash-looping 40 seconds later.
+    - name: Assert the vaulted database passwords are set
+      ansible.builtin.assert:
+        that:
+          - pterodactyl_db_password | default('') | length > 0
+          - pterodactyl_db_root_password | default('') | length > 0
+        fail_msg: >
+          pterodactyl_db_password and pterodactyl_db_root_password must be
+          set in group_vars/all/vault.yml — run `task vault:edit` and add
+          them. This repo is public, so they cannot live in group_vars.
+
+    - name: Ensure pterodactyl directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ pterodactyl_compose_dir }}"
+        - "{{ pterodactyl_data_dir }}"
+        - "{{ pterodactyl_data_dir }}/database"
+        - "{{ pterodactyl_data_dir }}/var"
+        - "{{ pterodactyl_data_dir }}/nginx"
+        - "{{ pterodactyl_data_dir }}/logs"
+      check_mode: false
+
+    # mode 0640, not 0644: this file carries both database passwords in
+    # plaintext. Unavoidable — compose has no secret indirection for
+    # plain env — but it doesn't need to be world-readable.
+    - name: Render Pterodactyl Panel docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ pterodactyl_compose_dir }}/docker-compose.yml"
+        mode: "0640"
+        content: |
+          ---
+          services:
+            database:
+              image: {{ pterodactyl_db_image }}
+              container_name: pterodactyl-db
+              restart: unless-stopped
+              command: --default-authentication-plugin=mysql_native_password
+              environment:
+                MYSQL_DATABASE: "{{ pterodactyl_db_name }}"
+                MYSQL_USER: "{{ pterodactyl_db_user }}"
+                MYSQL_PASSWORD: "{{ pterodactyl_db_password }}"
+                MYSQL_ROOT_PASSWORD: "{{ pterodactyl_db_root_password }}"
+              volumes:
+                - {{ pterodactyl_data_dir }}/database:/var/lib/mysql
+
+            cache:
+              image: {{ pterodactyl_cache_image }}
+              container_name: pterodactyl-cache
+              restart: unless-stopped
+
+            panel:
+              image: {{ pterodactyl_panel_image }}
+              container_name: pterodactyl-panel
+              restart: unless-stopped
+              depends_on:
+                - database
+                - cache
+              ports:
+                - "{{ pterodactyl_http_port }}:80"
+              environment:
+                APP_URL: "{{ pterodactyl_app_url }}"
+                APP_TIMEZONE: "{{ timezone }}"
+                APP_ENV: "production"
+                APP_ENVIRONMENT_ONLY: "false"
+                APP_SERVICE_AUTHOR: "{{ admin_user }}@{{ domain_name }}"
+                CACHE_DRIVER: "redis"
+                SESSION_DRIVER: "redis"
+                QUEUE_DRIVER: "redis"
+                REDIS_HOST: "cache"
+                DB_HOST: "database"
+                DB_PORT: "3306"
+                DB_DATABASE: "{{ pterodactyl_db_name }}"
+                DB_USERNAME: "{{ pterodactyl_db_user }}"
+                DB_PASSWORD: "{{ pterodactyl_db_password }}"
+                HASHIDS_LENGTH: "8"
+              volumes:
+                # THE directory to back up. The image's entrypoint
+                # generates APP_KEY and HASHIDS_SALT on first boot and
+                # writes them to var/.env, then reuses them forever.
+                # Lose that file and every encrypted value in the
+                # database — node daemon tokens, user 2FA secrets — is
+                # unrecoverable, even with an intact DB dump. This is
+                # also why no APP_KEY is vaulted: generating it is the
+                # image's job, persisting it is ours.
+                - {{ pterodactyl_data_dir }}/var:/app/var
+                - {{ pterodactyl_data_dir }}/nginx:/etc/nginx/http.d
+                - {{ pterodactyl_data_dir }}/logs:/app/storage/logs
+      check_mode: false
+
+    # Launching a real container requires overlay2, which can't mount
+    # inside a Docker-in-Docker target (overlay-on-overlay → "invalid
+    # argument"). Skipped under Molecule; inert tag on real hosts.
+    - name: Bring up the Pterodactyl Panel stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ pterodactyl_compose_dir }}"
+        state: present
+      when: not ansible_check_mode
+      tags: molecule-notest
+
+    - name: Allow Pterodactyl Panel web port through ufw
+      community.general.ufw:
+        rule: allow
+        to_port: "{{ pterodactyl_http_port }}"
+        proto: tcp
+        state: enabled

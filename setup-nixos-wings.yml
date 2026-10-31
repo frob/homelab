@@ -1,0 +1,14 @@
+## Pterodactyl Wings host (NixOS). Run against hosts in the
+## [nixos_wings] group via `task deploy:nixos-wings`, which passes
+## `-e target_hosts=nixos_wings`.
+##
+## Unlike every setup-<role>.yml here, this imports no baseline chain —
+## not an oversight. The Debian baseline phases configure apt sources,
+## write /etc/network/interfaces, drive hostnamectl and manage ufw, none
+## of which exist or apply on NixOS. Its equivalent is
+## nixos/modules/base.nix: the admin user and its public_keys, sudo
+## requiring a password, SSH with password auth off, Docker with the same
+## log rotation, timezone, unattended upgrades. That lands in the same
+## switch as the Wings role, so one phase does the whole host.
+---
+- import_playbook: playbooks/nixos-wings.yml

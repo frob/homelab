@@ -1,0 +1,23 @@
+---
+# Group vars for NixOS Pterodactyl Wings hosts.
+#
+# Almost nothing lives here on purpose: the host's configuration is the
+# flake under nixos/, not Ansible variables. The phase
+# (playbooks/nixos-wings.yml) only syncs that tree and runs
+# nixos-rebuild. What belongs here is what Ansible itself needs to talk
+# to a NixOS box, plus the per-host flake-output name (which goes in
+# host_vars/<host>.yml as nixos_host).
+
+# NixOS has no /usr/bin/python3 — interpreters live in the Nix store and
+# are exposed through the current system profile. Ansible's interpreter
+# discovery doesn't know about that path, and when it comes up empty the
+# error mentions neither Python nor NixOS; you get a bare "module
+# failed" on the first task. Set it explicitly.
+ansible_python_interpreter: /run/current-system/sw/bin/python3
+
+# The admin's sudo password hash, referenced by path from
+# nixos/modules/base.nix (users.users.frob.hashedPasswordFile) and
+# written to /etc/nixos-secrets/admin.pass by the phase. The value is
+# `nixos_admin_password_hash` in group_vars/all/vault.yml — a public repo
+# can't hold the hash, and NixOS can't read the vault, so the file on
+# disk is the seam between them. Generate one with `task nixos:passwd`.

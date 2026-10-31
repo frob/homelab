@@ -1,0 +1,18 @@
+## Pterodactyl Panel host. Baseline + the panel stack (panel + MariaDB
+## + Redis). Run against hosts in the [pterodactyl] group via
+## `task deploy:pterodactyl`, which passes `-e target_hosts=pterodactyl`.
+##
+## util1 is in both [jellyfin] and [pterodactyl], so both group_vars
+## load and either role deploy leaves the box whole — the baseline is
+## idempotent and the two role phases don't overlap.
+##
+## This covers the control plane only. The Wings nodes that actually run
+## game servers are NixOS hosts: see setup-nixos-wings.yml.
+---
+- import_playbook: playbooks/debian-init.yml
+- import_playbook: playbooks/debian-basic.yml
+- import_playbook: playbooks/debian-network.yml
+- import_playbook: playbooks/debian-docker.yml
+- import_playbook: playbooks/debian-portainer-agent.yml
+- import_playbook: playbooks/debian-cockpit.yml
+- import_playbook: playbooks/debian-pterodactyl-panel.yml

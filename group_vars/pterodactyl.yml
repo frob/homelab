@@ -1,0 +1,50 @@
+---
+# Group vars for the Pterodactyl Panel host. The baseline +
+# debian-pterodactyl-panel.yml phase renders a three-service compose
+# stack (panel + MariaDB + Redis) and brings it up.
+#
+# The panel is the control plane only — game servers run on Wings nodes,
+# which are NixOS hosts in the [nixos_wings] group (see nixos/ and
+# playbooks/nixos-wings.yml). Nothing here touches them; the panel
+# learns about a node when you create it in the UI.
+#
+# Host-identity vars (host_name, network_*) are per-host — put them in
+# host_vars/<host>.yml.
+
+# Images, all pinned; bump deliberately and roll out with
+# `task deploy:pterodactyl-only`.
+pterodactyl_panel_image: ghcr.io/pterodactyl/panel:v1.15.1
+pterodactyl_db_image: mariadb:11
+pterodactyl_cache_image: redis:7-alpine
+
+# Where the compose file lives, and where the stack's state lives. Split
+# because the state outgrows a small root/var partition — override
+# pterodactyl_data_dir in host_vars to put it on a bigger volume.
+pterodactyl_compose_dir: /opt/pterodactyl
+pterodactyl_data_dir: /opt/pterodactyl/data
+
+# Host port published for the panel's web UI + API. The container
+# listens on 80; there is no 443 mapping on purpose — this is a LAN
+# deployment with no TLS (see pterodactyl_app_url).
+pterodactyl_http_port: 8081
+
+# MUST include the scheme AND the port. Laravel builds every asset URL,
+# redirect and generated link from APP_URL: drop the port and the login
+# page loads without CSS and then bounces the browser to port 80. Change
+# this and the panel needs a restart (`task deploy:pterodactyl-only`),
+# not just a browser reload.
+#
+# Nodes are created in the panel with SSL *off*, so the panel talks to
+# Wings over plain HTTP too. Fronting this with a TLS proxy later means
+# switching the node to SSL and putting a cert on every Wings host —
+# Wings rejects a mismatched cert, and a browser blocks the websocket
+# console from an https panel to an http node.
+pterodactyl_app_url: "http://util1.{{ domain_name }}:{{ pterodactyl_http_port }}"
+
+# Database the panel owns. The password and the MariaDB root password
+# are NOT here — they're in group_vars/all/vault.yml as
+# `pterodactyl_db_password` and `pterodactyl_db_root_password`, because
+# this repo is public. Set them with `task vault:edit`; the phase
+# asserts both are defined before it renders anything.
+pterodactyl_db_name: panel
+pterodactyl_db_user: pterodactyl

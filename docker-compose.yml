@@ -26,6 +26,46 @@ services:
       - user_ssh_key
       - vault_pass
 
+  # Nix, for checking the NixOS half of the repo offline. Separate from
+  # the ansible runner on purpose: the deploy path does NOT need Nix
+  # (playbooks/nixos-wings.yml syncs the flake and lets the target
+  # evaluate it), so the toolchain has no business in the image every
+  # task builds. This service exists only so `task nix:check` can catch
+  # an eval error or a stale derivation hash at the workstation instead
+  # of on a host — the same reason the `jellyfin` Molecule scenario
+  # parses its compose file.
+  nix:
+    image: nixos/nix:2.35.2
+    container_name: "nix_homelab"
+    restart: "no"
+    command: ["nix", "--version"]
+    environment:
+      # Flakes are still gated behind experimental-features.
+      # filter-syscalls = false is required to run nix inside a
+      # container whose seccomp profile blocks the syscall filters nix
+      # installs; without it builds die with "unable to load seccomp
+      # BPF program".
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        filter-syscalls = false
+    volumes:
+      - "./:/homelab:rw,delegated"
+      # A NAMED volume at /nix, which looks alarming — /nix is where
+      # the image keeps nix itself. It works because Docker seeds an
+      # empty named volume from the image's contents at that path on
+      # first use, so the volume starts as the image's own store and
+      # then persists. A bind mount here would instead shadow it and
+      # leave the container with no nix at all.
+      #
+      # The persistence is the point: without it every `nix:check`
+      # re-downloads the whole nixpkgs tarball (100MB+).
+      - "nix_store:/nix"
+    working_dir: /homelab
+
+volumes:
+  # Nix store for the `nix` service above. `task clean:all` drops it.
+  nix_store:
+
 secrets:
   # Private key the runner uses to reach managed hosts. Override the
   # path with ANSIBLE_SSH_KEY (export it, or put it in a .env beside

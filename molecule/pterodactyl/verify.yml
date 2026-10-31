@@ -1,0 +1,149 @@
+---
+# Post-converge assertions for the Pterodactyl Panel phase. The point of
+# this scenario is the rendered compose file, so parse it rather than
+# grepping it — a template change that produces valid-looking text but
+# invalid YAML has to fail here, not on a live host.
+
+- name: Verify Pterodactyl Panel phase state
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Pterodactyl directories exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: pt_dirs
+      loop:
+        - "{{ pterodactyl_compose_dir }}"
+        - "{{ pterodactyl_data_dir }}"
+        - "{{ pterodactyl_data_dir }}/database"
+        - "{{ pterodactyl_data_dir }}/var"
+        - "{{ pterodactyl_data_dir }}/nginx"
+        - "{{ pterodactyl_data_dir }}/logs"
+
+    - name: Assert Pterodactyl directories are directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+        fail_msg: "{{ item.item }} missing or not a directory."
+      loop: "{{ pt_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the rendered compose file
+      ansible.builtin.slurp:
+        src: "{{ pterodactyl_compose_dir }}/docker-compose.yml"
+      register: pt_compose_raw
+
+    - name: Parse the rendered compose file
+      ansible.builtin.set_fact:
+        pt_compose: "{{ pt_compose_raw.content | b64decode | from_yaml }}"
+
+    # from_yaml above already fails the play on malformed YAML. These
+    # catch the subtler breakage: valid YAML that lost a key, or nested
+    # a block at the wrong depth so it landed outside the service.
+    - name: Assert all three services are defined with their pinned images
+      ansible.builtin.assert:
+        that:
+          - pt_compose.services | length == 3
+          - pt_compose.services.panel.image == pterodactyl_panel_image
+          - pt_compose.services.database.image == pterodactyl_db_image
+          - pt_compose.services.cache.image == pterodactyl_cache_image
+        fail_msg: >
+          Rendered compose lost or mangled a service:
+          {{ pt_compose | to_nice_yaml }}
+
+    - name: Assert the panel publishes its web port to container 80
+      ansible.builtin.assert:
+        that:
+          - "pterodactyl_http_port ~ ':80' in pt_compose.services.panel.ports"
+          # No 443 mapping: this is a plain-HTTP LAN deployment, and a
+          # published 443 with no cert config behind it is a trap.
+          - pt_compose.services.panel.ports | length == 1
+        fail_msg: >
+          Panel ports wrong:
+          {{ pt_compose.services.panel.ports | to_nice_yaml }}
+
+    # The irreplaceable mount. The image generates APP_KEY and
+    # HASHIDS_SALT into var/.env on first boot; if that bind mount ever
+    # goes missing from the template, the panel silently regenerates
+    # them on every restart and every encrypted value in the database —
+    # node tokens, 2FA secrets — becomes undecryptable.
+    - name: Assert the panel's persistent mounts are present
+      ansible.builtin.assert:
+        that:
+          - "pterodactyl_data_dir ~ '/var:/app/var' in pt_compose.services.panel.volumes"
+          - "pterodactyl_data_dir ~ '/nginx:/etc/nginx/http.d' in pt_compose.services.panel.volumes"
+          - "pterodactyl_data_dir ~ '/logs:/app/storage/logs' in pt_compose.services.panel.volumes"
+        fail_msg: >
+          Panel bind mounts wrong:
+          {{ pt_compose.services.panel.volumes | to_nice_yaml }}
+
+    - name: Assert the database persists to a bind mount
+      ansible.builtin.assert:
+        that:
+          - "pterodactyl_data_dir ~ '/database:/var/lib/mysql' in pt_compose.services.database.volumes"
+        fail_msg: >
+          Database bind mount wrong:
+          {{ pt_compose.services.database.volumes | default('(none)') }}
+
+    # APP_URL without its port is the single most likely template
+    # regression: the panel comes up, then serves asset URLs on port 80
+    # and bounces every login. Cheap to assert, expensive to diagnose.
+    - name: Assert APP_URL carries the published port
+      ansible.builtin.assert:
+        that:
+          - pt_compose.services.panel.environment.APP_URL is search(':' ~ pterodactyl_http_port)
+        fail_msg: >
+          APP_URL must include the published port, got
+          '{{ pt_compose.services.panel.environment.APP_URL }}'.
+
+    - name: Assert the panel is wired to the database and cache services
+      ansible.builtin.assert:
+        that:
+          - pt_compose.services.panel.environment.DB_HOST == 'database'
+          - pt_compose.services.panel.environment.REDIS_HOST == 'cache'
+          - pt_compose.services.panel.environment.DB_PASSWORD == pterodactyl_db_password
+          - pt_compose.services.panel.environment.CACHE_DRIVER == 'redis'
+          - pt_compose.services.panel.environment.SESSION_DRIVER == 'redis'
+          - pt_compose.services.panel.environment.QUEUE_DRIVER == 'redis'
+        fail_msg: >
+          Panel environment wrong:
+          {{ pt_compose.services.panel.environment | to_nice_yaml }}
+
+    - name: Assert the database credentials reached the db service
+      ansible.builtin.assert:
+        that:
+          - pt_compose.services.database.environment.MYSQL_DATABASE == pterodactyl_db_name
+          - pt_compose.services.database.environment.MYSQL_USER == pterodactyl_db_user
+          - pt_compose.services.database.environment.MYSQL_PASSWORD == pterodactyl_db_password
+          - pt_compose.services.database.environment.MYSQL_ROOT_PASSWORD == pterodactyl_db_root_password
+        fail_msg: >
+          Database environment wrong:
+          {{ pt_compose.services.database.environment | to_nice_yaml }}
+
+    # The file carries both passwords in plaintext; it must not be
+    # world-readable.
+    - name: Stat the rendered compose file
+      ansible.builtin.stat:
+        path: "{{ pterodactyl_compose_dir }}/docker-compose.yml"
+      register: pt_compose_stat
+
+    - name: Assert the compose file is not world-readable
+      ansible.builtin.assert:
+        that:
+          - pt_compose_stat.stat.mode == '0640'
+        fail_msg: >
+          Expected mode 0640 on the compose file (it holds both database
+          passwords), got {{ pt_compose_stat.stat.mode }}.
+
+    - name: Panel port is allowed through ufw
+      ansible.builtin.command: ufw status
+      register: pt_ufw
+      changed_when: false
+
+    - name: Assert ufw allows the panel web port
+      ansible.builtin.assert:
+        that:
+          - pterodactyl_http_port | string in pt_ufw.stdout
+        fail_msg: "ufw missing the Pterodactyl Panel rule:\n{{ pt_ufw.stdout }}"

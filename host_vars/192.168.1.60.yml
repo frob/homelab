@@ -1,0 +1,16 @@
+---
+# wings1 — Pterodactyl Wings node #1, NixOS.
+#
+# There is no network_* / host_name block here like the Debian hosts
+# have: hostname and static IP are declared in
+# nixos/hosts/wings1/default.nix, because on this host the flake owns
+# that state, not Ansible. Keep this file's address and the flake's in
+# step — the inventory address is how Ansible reaches the box, the
+# flake's is what the box configures itself with.
+
+# Which nixosConfigurations entry in nixos/flake.nix this host is.
+# nixos-rebuild is invoked as `--flake /etc/nixos#{{ nixos_host }}`, so
+# this is explicit rather than inferred from the hostname: a mismatch
+# fails with "flake output does not exist" instead of silently
+# configuring the box as a different node.
+nixos_host: wings1
