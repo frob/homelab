@@ -41,6 +41,15 @@ provisioner:
     defaults:
       collections_path: /ansible/collections
       stdout_callback: yaml
+      # Molecule generates its OWN ansible.cfg and points ANSIBLE_CONFIG
+      # at it, so nothing from the repo's ansible.cfg carries over —
+      # including vault_password_file. The inventory links in the real
+      # group_vars/, which contains the encrypted all/vault.yml, so
+      # without this every molecule action (destroy included) dies at
+      # "Attempting to decrypt but no vault secrets found" before a
+      # single task runs. Same path ansible.cfg uses: the compose
+      # secret mounted into the runner.
+      vault_password_file: /run/secrets/vault_pass
   # debian-jellyfin.yml tags its `docker compose up` task
   # molecule-notest: overlay2 can't mount inside a Docker-in-Docker
   # target. The tag was inert until now because no scenario skipped

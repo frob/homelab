@@ -3,7 +3,7 @@
 # with the docker-host baseline, and assert state. Skips phases that
 # can't realistically run inside a container — debian-init.yml (apt
 # CD-ROM source removal), debian-network.yml (netplan + reboot),
-# debian-gpu.yml (kernel modules), debian-wings.yml (also kernel-ish).
+# debian-gpu.yml (kernel modules).
 #
 # Run from the host with `task molecule:test`. The runner container
 # uses the host docker socket to spawn the target as a sibling
@@ -43,6 +43,15 @@ provisioner:
       # lookup behaves the same inside and outside molecule.
       collections_path: /ansible/collections
       stdout_callback: yaml
+      # Molecule generates its OWN ansible.cfg and points ANSIBLE_CONFIG
+      # at it, so nothing from the repo's ansible.cfg carries over —
+      # including vault_password_file. The inventory links in the real
+      # group_vars/, which contains the encrypted all/vault.yml, so
+      # without this every molecule action (destroy included) dies at
+      # "Attempting to decrypt but no vault secrets found" before a
+      # single task runs. Same path ansible.cfg uses: the compose
+      # secret mounted into the runner.
+      vault_password_file: /run/secrets/vault_pass
   inventory:
     # Molecule builds its own ephemeral inventory and does NOT see the
     # repo's group_vars/ (they live next to the top-level playbooks,
